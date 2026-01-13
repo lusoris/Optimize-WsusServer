@@ -41,5 +41,8 @@ PSScriptAnalyzerResults.json
 *.bak
 *.backup
 
+# Claude Code temp files
+tmpclaude-*
+
 # Local development notes (keep briefing for now)
 # wsus-script-update-briefing.md

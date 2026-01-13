@@ -575,9 +575,49 @@ function Get-WsusIISConfig {
 }
 
 function Get-WsusIISLocalizedNamespacePath {
-    # Get localized WSUS IIS web site path: https://docs.microsoft.com/fr-fr/security-updates/windowsupdateservices/18127277 - Document is in English but posted in the French docs
+    <#
+    .SYNOPSIS
+    Gets the localized IIS namespace path for WSUS ClientWebService.
+
+    .DESCRIPTION
+    Determines the correct IIS path for the WSUS ClientWebService by matching
+    the WSUS installation directory with IIS website physical paths.
+    Handles environment variable expansion for proper path matching.
+
+    .LINK
+    https://docs.microsoft.com/fr-fr/security-updates/windowsupdateservices/18127277
+
+    .LINK
+    https://github.com/awarre/Optimize-WsusServer/issues/20
+    #>
+
+    # Get WSUS installation path from registry
     $iisSitePhysicalPath = Get-ItemPropertyValue -Path 'HKLM:\SOFTWARE\Microsoft\Update Services\Server\Setup\' -Name "TargetDir"
-    $iisLocalizedString = Get-Website | Where-Object {$($_.PhysicalPath).StartsWith($iisSitePhysicalPath)} | Select-Object -ExpandProperty Name
+
+    # Expand environment variables in the registry path (e.g., %SystemDrive% -> C:)
+    $iisSitePhysicalPath = [System.Environment]::ExpandEnvironmentVariables($iisSitePhysicalPath)
+
+    # Find the IIS website that matches the WSUS installation path
+    # Also expand environment variables in website physical paths for proper comparison
+    $iisLocalizedString = Get-Website | Where-Object {
+        $expandedPath = [System.Environment]::ExpandEnvironmentVariables($_.PhysicalPath)
+        $expandedPath.StartsWith($iisSitePhysicalPath) -or $iisSitePhysicalPath.StartsWith($expandedPath)
+    } | Select-Object -ExpandProperty Name
+
+    # Fallback: If no match found, try to find by WSUS-specific characteristics
+    if ([string]::IsNullOrEmpty($iisLocalizedString)) {
+        # Try to find website containing ClientWebService application
+        $iisLocalizedString = Get-Website | Where-Object {
+            $siteName = $_.Name
+            $null -ne (Get-WebApplication -Site $siteName -Name "ClientWebService" -ErrorAction SilentlyContinue)
+        } | Select-Object -First 1 -ExpandProperty Name
+    }
+
+    if ([string]::IsNullOrEmpty($iisLocalizedString)) {
+        Write-Warning "Could not determine WSUS IIS website. Using default 'WSUS Administration'."
+        $iisLocalizedString = "WSUS Administration"
+    }
+
     $iisLocalizedNamespacePath = "IIS:\Sites\$iisLocalizedString\ClientWebService"
     return $iisLocalizedNamespacePath
 }
