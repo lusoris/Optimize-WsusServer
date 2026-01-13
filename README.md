@@ -1,13 +1,17 @@
-![GitHub](https://img.shields.io/github/license/awarre/Optimize-WsusServer?style=flat-square) ![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/awarre/Optimize-WsusServer?include_prereleases&style=flat-square)
 # Optimize-WsusServer.PS1
 
-<!-- ABOUT THE PROJECT -->
-### About The Project
+![GitHub](https://img.shields.io/github/license/awarre/Optimize-WsusServer?style=flat-square) ![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/lusoris/Optimize-WsusServer?include_prereleases&style=flat-square)
+
+> **Note:** This is a maintained fork of [awarre/Optimize-WsusServer](https://github.com/awarre/Optimize-WsusServer) with bug fixes and new features based on Microsoft's 2024/2025 best practices.
+
+## About The Project
+
 Comprehensive Windows Server Update Services (WSUS) cleanup, optimization, maintenance, and configuration PowerShell script.
 
-Free and open source: [MIT License](https://github.com/awarre/Optimize-WsusServer/blob/master/LICENSE)
+Free and open source: [MIT License](https://github.com/lusoris/Optimize-WsusServer/blob/master/LICENSE)
 
-**Features**
+### Features
+
 * Deep cleaning search and removal of unnecessary updates by product title and update title.
 * Removal of device drivers from WSUS repository (greatly improves speed, reliability, and reduces storage space needed).
 * IIS Configuration validation and optimization.
@@ -16,100 +20,171 @@ Free and open source: [MIT License](https://github.com/awarre/Optimize-WsusServe
 * Microsoft best practice WSUS database optimization and re-indexing.
 * Creation of daily and weekly optimization scheduled tasks.
 
-<!-- TABLE OF CONTENTS -->
+### New in v2.0.0
+
+* **Health Check** (`-HealthCheck`) - Comprehensive server health report including:
+  * SSL configuration status
+  * Storage and content folder size
+  * Update statistics with superseded count warning (>1500)
+  * UUP MIME types check for Windows 11
+* **UUP MIME Types** (`-FixUupMimeTypes`) - Check and add missing .msu/.wim MIME types for Windows 11 22H2+
+* **Extended IIS Settings** - Now validates IdleTimeout, PingEnabled, and RecyclingRegularTimeInterval
+* **SSL Support** - Automatic SSL detection for WSUS connections
+* **SqlServer Module Compatibility** - Works with SqlServer module >21.x
+
 ## Table of Contents
+
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
   * [Installation](#installation)
 * [Usage](#usage)
+* [What's Fixed](#whats-fixed)
 * [License](#license)
 * [Contact](#contact)
 * [References](#references)
 
-<!-- GETTING STARTED -->
 ## Getting Started
 
 ### Prerequisites
-* PowerShell
-* Windows Server Update Services (WSUS)
-* [SqlServer Official PowerShell module](https://docs.microsoft.com/en-us/sql/powershell/download-sql-server-ps-module?view=sql-server-ver15)
-* PowerShell 6 - [Microsoft has not ported the WSUS module to PowerShell 7](https://github.com/PowerShell/PowerShellModuleCoverage/issues/11)
-* [IIS Administration PowerShell module](https://blogs.iis.net/iisteam/introducing-iisadministration-in-the-powershell-gallery) - Needed for Server 2012 R2
+
+* **Windows Server 2016/2019/2022** with WSUS installed
+* **Windows PowerShell 5.1** (PowerShell 7 is NOT supported - Microsoft has not ported the WSUS module)
+* [SqlServer PowerShell module](https://docs.microsoft.com/en-us/sql/powershell/download-sql-server-ps-module?view=sql-server-ver15)
+* [IIS Administration PowerShell module](https://blogs.iis.net/iisteam/introducing-iisadministration-in-the-powershell-gallery) (needed for Server 2012 R2)
 
 ### Installation
-1. Download [Optimize-WsusServer.ps1](https://github.com/awarre/Optimize-WsusServer/blob/master/Optimize-WsusServer.ps1)
-2. From PowerShell run
+
+1. Download [Optimize-WsusServer.ps1](https://github.com/lusoris/Optimize-WsusServer/blob/master/Optimize-WsusServer.ps1)
+2. From PowerShell run:
+
 ```powershell
-Optimize-WsusServer.ps1 -FirstRun
+.\Optimize-WsusServer.ps1 -FirstRun
 ```
-<!-- USAGE EXAMPLES -->
+
 ## Usage
 
-```powershell
-Optimize-WsusServer.ps1 -FirstRun
-```
-Presents a series of prompts for user to initiate all recommended first run optimization tasks. Additional parameters will be ignored, as they will be redundant.
+### First Run (Recommended)
 
 ```powershell
-Optimize-WsusServer.ps1 -DisableDrivers
+.\Optimize-WsusServer.ps1 -FirstRun
 ```
-Disable device driver synchronization and caching.
+
+Presents a series of prompts for user to initiate all recommended first run optimization tasks.
+
+### Health Check (New)
 
 ```powershell
-Optimize-WsusServer.ps1 -DeepClean
+.\Optimize-WsusServer.ps1 -HealthCheck
 ```
-Searches through most likely categories for unneeded updates and drivers to free up massive amounts of storage and improve database responsiveness. Prompts user to approve removal before deletion.
+
+Runs a comprehensive health check on the WSUS server including SSL status, update statistics, storage usage, and UUP MIME types.
+
+### Fix UUP MIME Types (New)
 
 ```powershell
-Optimize-WsusServer.ps1 -CheckConfig
+.\Optimize-WsusServer.ps1 -FixUupMimeTypes
 ```
-Validates current WSUS IIS configuration against recommended settings. Helps prevent frequent WSUS/IIS/SQL service crashes and the "RESET SERVER NODE" error.
+
+Checks and adds missing UUP MIME types (.msu, .wim) required for Windows 11 22H2+ updates.
+
+### Configuration Check
 
 ```powershell
-Optimize-WsusServer.ps1 -OptimizeServer
+.\Optimize-WsusServer.ps1 -CheckConfig
 ```
+
+Validates current WSUS IIS configuration against recommended settings. Now includes IdleTimeout, PingEnabled, and RecyclingRegularTimeInterval.
+
+### Server Optimization
+
+```powershell
+.\Optimize-WsusServer.ps1 -OptimizeServer
+```
+
 Runs all of Microsoft's built-in WSUS cleanup processes.
 
+### Database Optimization
+
 ```powershell
-Optimize-WsusServer.ps1 -OptimizeDatabase
+.\Optimize-WsusServer.ps1 -OptimizeDatabase
 ```
+
 Runs Microsoft's recommended SQL reindexing script.
 
-```powershell
-Optimize-WsusServer.ps1 -InstallDailyTask
-```
-Creates a scheduled task to run the OptimizeServer function nightly.
+### Deep Clean
 
 ```powershell
-Optimize-WsusServer.ps1 -InstallWeeklyTask
+.\Optimize-WsusServer.ps1 -DeepClean
 ```
-Creates a scheduled task to run the OptimizeDatabase function weekly.
 
-<!-- LICENSE -->
+Searches through most likely categories for unneeded updates and drivers to free up massive amounts of storage and improve database responsiveness.
+
+### Disable Drivers
+
+```powershell
+.\Optimize-WsusServer.ps1 -DisableDrivers
+```
+
+Disable device driver synchronization and caching.
+
+### Scheduled Tasks
+
+```powershell
+.\Optimize-WsusServer.ps1 -InstallDailyTask
+.\Optimize-WsusServer.ps1 -InstallWeeklyTask
+```
+
+Creates scheduled tasks to run OptimizeServer nightly and OptimizeDatabase weekly.
+
+### Decline Superseded Updates
+
+```powershell
+.\Optimize-WsusServer.ps1 -DeclineSupersededUpdates
+```
+
+Declines all updates that have been approved and are superseded by other updates.
+
+## What's Fixed
+
+This fork addresses the following issues from the original repository:
+
+| Issue | Description | Fix |
+| ----- | ----------- | --- |
+| [#20](https://github.com/awarre/Optimize-WsusServer/issues/20) | Get-WsusIISLocalizedNamespacePath returns empty path | Environment variable expansion added |
+| [#24](https://github.com/awarre/Optimize-WsusServer/issues/24) | PowerShell 7 support | Added compatibility check with helpful error message |
+| [#25](https://github.com/awarre/Optimize-WsusServer/issues/25) | SQL Server encryption error | Added `-Encrypt Optional` parameter |
+| [#26](https://github.com/awarre/Optimize-WsusServer/issues/26) | SqlServer module >21.x incompatibility | Added `-Encrypt Optional` parameter |
+| [#27](https://github.com/awarre/Optimize-WsusServer/issues/27) | SSL error on first run | Added automatic SSL detection |
+| [#31](https://github.com/awarre/Optimize-WsusServer/issues/31) | SqlServer 22.3.0 missing invoke-sqlcmd | Works with latest SqlServer module |
+| [#33](https://github.com/awarre/Optimize-WsusServer/issues/33) | HTTP requests fail when SSL required | Added automatic SSL detection and fallback |
+
 ## License
+
 Distributed under the MIT License. See `LICENSE` for more information.
 
-<!-- CONTACT -->
 ## Contact
 
-Project Link: [https://github.com/awarre/Optimize-WsusServer](https://github.com/awarre/Optimize-WsusServer)
+* Fork Maintainer: [lusoris](https://github.com/lusoris)
+* Original Project: [awarre/Optimize-WsusServer](https://github.com/awarre/Optimize-WsusServer)
 
-<!-- REFERENCES -->
 ## References
+
+### Microsoft Documentation
+
 * [The complete guide to Microsoft WSUS and Configuration Manager SUP maintenance](https://support.microsoft.com/en-us/help/4490644/complete-guide-to-microsoft-wsus-and-configuration-manager-sup-maint)
 * [Windows Server Update Services best practices](https://docs.microsoft.com/en-us/troubleshoot/mem/configmgr/windows-server-update-services-best-practices)
+* [Plan your WSUS deployment](https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/plan/plan-your-wsus-deployment)
 * [Reindex the WSUS Database](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd939795(v=ws.10))
-* [10 Tips for the SQL Server PowerShell Scripter](https://devblogs.microsoft.com/scripting/10-tips-for-the-sql-server-powershell-scripter/)
-* [How to Check if an Index Exists on a Table in SQL Server](https://littlekendra.com/2016/01/28/how-to-check-if-an-index-exists-on-a-table-in-sql-server/)
-* [Getting 2016 updates to work on WSUS](https://www.reddit.com/r/sysadmin/comments/996xul/getting_2016_updates_to_work_on_wsus/)
-* [Examples of Comment-Based Help](https://docs.microsoft.com/en-us/powershell/scripting/developer/help/examples-of-comment-based-help?view=powershell-7)
-* [Get-IISSite](https://docs.microsoft.com/en-us/powershell/module/iisadministration/get-iissite?view=win10-ps)
-* [Get-WebApplication](https://docs.microsoft.com/en-us/powershell/module/webadminstration/get-webapplication?view=winserver2012-ps)
-* [Get-WsusClassification](https://docs.microsoft.com/en-us/powershell/module/wsus/get-wsusclassification?view=win10-ps)
-* [Get-WsusProduct](https://docs.microsoft.com/en-us/powershell/module/wsus/get-wsusproduct?view=win10-ps)
+* [WSUS Automatic Maintenance](https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/wsus-automatic-maintenance)
+
+### PowerShell References
+
+* [SqlServer PowerShell Module](https://docs.microsoft.com/en-us/sql/powershell/download-sql-server-ps-module?view=sql-server-ver15)
+* [IIS Administration Module](https://blogs.iis.net/iisteam/introducing-iisadministration-in-the-powershell-gallery)
 * [Invoke-Sqlcmd](https://docs.microsoft.com/en-us/powershell/module/sqlserver/invoke-sqlcmd?view=sqlserver-ps)
 * [Invoke-WsusServerCleanup](https://docs.microsoft.com/en-us/powershell/module/wsus/Invoke-WsusServerCleanup?view=win10-ps)
-* [ScheduledTasks](https://docs.microsoft.com/en-us/powershell/module/scheduledtasks/?view=win10-ps)
-* [Set-WsusClassification](https://docs.microsoft.com/en-us/powershell/module/updateservices/set-wsusclassification?view=win10-ps)
-* [WSUS GetUpdates Method](https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa350127(v=vs.85))
-* [WSUS IUpdate Properties](https://docs.microsoft.com/en-us/previous-versions/windows/desktop/ms752741(v=vs.85))
+
+### Other Resources
+
+* [10 Tips for the SQL Server PowerShell Scripter](https://devblogs.microsoft.com/scripting/10-tips-for-the-sql-server-powershell-scripter/)
+* [Getting 2016 updates to work on WSUS](https://www.reddit.com/r/sysadmin/comments/996xul/getting_2016_updates_to_work_on_wsus/)
