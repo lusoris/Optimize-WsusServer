@@ -1,4 +1,5 @@
 #Requires -modules SqlServer
+#Requires -Version 5.1
 
 <#
 .SYNOPSIS
@@ -40,10 +41,17 @@ Declines all updates that have been approved and are superseded by other updates
 .PARAMETER InstallWeeklyTask
     Creates a scheduled task to run the OptimizeDatabase function weekly.
 
+.PARAMETER HealthCheck
+    Runs a comprehensive health check on the WSUS server including SSL status, update statistics, storage usage, and UUP MIME types.
+
+.PARAMETER FixUupMimeTypes
+    Checks and adds missing UUP MIME types (.msu, .wim) required for Windows 11 22H2+ updates.
+
 .NOTES
-  Version:        1.2.1
-  Author:         Austin Warren
+  Version:        2.0.0
+  Author:         Austin Warren (original), lusoris (fork maintainer)
   Creation Date:  2020/07/31
+  Last Modified:  2026/01/13
 
 .EXAMPLE
   Optimize-WsusServer.ps1 -FirstRun
@@ -78,18 +86,43 @@ param (
     [Parameter()]
     [switch]
     $OptimizeDatabase,
+    [Parameter()]
     [switch]
-    $DeclineSupersededUpdates
+    $DeclineSupersededUpdates,
+    [Parameter()]
+    [switch]
+    $HealthCheck,
+    [Parameter()]
+    [switch]
+    $FixUupMimeTypes
 )
+
+#----------------------------------------------------------[Compatibility Check]----------------------------------------------------------
+
+# Check for PowerShell 7+ and warn user (Issue #24)
+# WSUS module is not available in PowerShell 7
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    Write-Warning "PowerShell 7+ detected. The WSUS module is not available in PowerShell 7."
+    Write-Warning "Please run this script using Windows PowerShell 5.1:"
+    Write-Warning "  powershell.exe -File `"$PSCommandPath`""
+    exit 1
+}
+
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
-# Recommended IIS settings: https://www.reddit.com/r/sysadmin/comments/996xul/getting_2016_updates_to_work_on_wsus/
+# Recommended IIS settings
+# Sources:
+# - https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/windows-server-update-services-best-practices
+# - https://www.reddit.com/r/sysadmin/comments/996xul/getting_2016_updates_to_work_on_wsus/
 $recommendedIISSettings = @{
-    QueueLength              = 25000
+    QueueLength              = 25000   # Default: 1000, MS recommends 2000+
     LoadBalancerCapabilities = 'TcpLevel'
     CpuResetInterval         = 15
-    RecyclingMemory          = 0
-    RecyclingPrivateMemory   = 0
+    RecyclingMemory          = 0       # Disable virtual memory limit
+    RecyclingPrivateMemory   = 0       # Disable private memory limit (default: 1843200)
+    RecyclingRegularTimeInterval = 0   # Disable periodic recycling (default: 1740 = 29h)
+    IdleTimeout              = 0       # Disable idle timeout (default: 20 min)
+    PingEnabled              = $false  # Disable ping
     ClientMaxRequestLength   = 204800
     ClientExecutionTimeout   = 7200
 }
@@ -348,6 +381,68 @@ GO
 
 #-----------------------------------------------------------[Functions]------------------------------------------------------------
 
+function Get-WsusServerInstance {
+    <#
+    .SYNOPSIS
+    Gets a connection to the WSUS server with SSL support.
+
+    .DESCRIPTION
+    Creates a connection to the local WSUS server, automatically detecting whether SSL is required.
+    Fixes issues #27 and #33 where SSL connections fail.
+
+    .LINK
+    https://github.com/awarre/Optimize-WsusServer/issues/33
+    https://github.com/awarre/Optimize-WsusServer/issues/27
+    #>
+
+    [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | Out-Null
+
+    # Try to detect WSUS SSL configuration from registry
+    $wsusSetup = Get-ItemProperty -Path "HKLM:\Software\Microsoft\Update Services\Server\Setup" -ErrorAction SilentlyContinue
+    $useSSL = $false
+    $portNumber = 8530
+
+    if ($wsusSetup) {
+        # Check if SSL is configured
+        if ($wsusSetup.PSObject.Properties.Name -contains "UsingSSL") {
+            $useSSL = [bool]$wsusSetup.UsingSSL
+        }
+
+        # Get configured port
+        if ($wsusSetup.PSObject.Properties.Name -contains "PortNumber") {
+            $portNumber = $wsusSetup.PortNumber
+        }
+    }
+
+    # If SSL is enabled, use SSL port (typically 8531)
+    if ($useSSL -and $portNumber -eq 8530) {
+        $portNumber = 8531
+    }
+
+    try {
+        # Try connecting with detected settings
+        $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $useSSL, $portNumber)
+        return $wsusServer
+    }
+    catch {
+        # Fallback: try without SSL first, then with SSL
+        try {
+            $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $false, 8530)
+            return $wsusServer
+        }
+        catch {
+            try {
+                $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $true, 8531)
+                return $wsusServer
+            }
+            catch {
+                Write-Error "Failed to connect to WSUS server. Please verify WSUS is running and accessible."
+                throw
+            }
+        }
+    }
+}
+
 function Confirm-Prompt ($prompt) {
     <#
     .SYNOPSIS
@@ -436,12 +531,13 @@ function Optimize-WsusDatabase {
     # https://devblogs.microsoft.com/scripting/10-tips-for-the-sql-server-powershell-scripter/
 
     Write-Host "Creating custom indexes in WSUS index if they don't already exist. This will speed up future database optimizations."
-    #Create custom indexes in the database if they don't already exist
-    Invoke-Sqlcmd -query $createCustomIndexesSQLQuery -ServerInstance $serverInstance -QueryTimeout 120
+    # Create custom indexes in the database if they don't already exist
+    # -Encrypt Optional fixes compatibility with SqlServer module >21.x (Issue #25, #26, #31)
+    Invoke-Sqlcmd -Query $createCustomIndexesSQLQuery -ServerInstance $serverInstance -QueryTimeout 120 -Encrypt Optional
 
     Write-Host "Running WSUS SQL database maintenence script. This can take an extremely long time on the first run."
-    #Run the WSUS SQL database maintenance script
-    Invoke-Sqlcmd -query $wsusDBMaintenanceSQLQuery -ServerInstance $serverInstance -QueryTimeout 40000
+    # Run the WSUS SQL database maintenance script
+    Invoke-Sqlcmd -Query $wsusDBMaintenanceSQLQuery -ServerInstance $serverInstance -QueryTimeout 40000 -Encrypt Optional
 }
 
 function New-WsusMaintainenceTask($interval) {
@@ -557,20 +653,31 @@ function Get-WsusIISConfig {
     $recyclingMemory = Get-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "memory"
     $recyclingPrivateMemory = Get-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "privateMemory"
 
+    # Regular Time Interval (periodic recycling)
+    $recyclingRegularTimeInterval = (Get-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "time").TotalMinutes
+
+    # Process Model Config (Idle Timeout, Ping)
+    $wsusPoolProcessModelConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "processModel"
+    $idleTimeout = (Get-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "idleTimeout").TotalMinutes
+    $pingEnabled = Get-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "pingingEnabled"
+
     $clientWebServiceConfig = Get-WebConfiguration -PSPath $iisPath -Filter "system.web/httpRuntime"
 
-    $clientMaxRequestLength = $clientWebServiceConfig | select-object -ExpandProperty maxRequestLength
-    $clientExecutionTimeout = ($clientWebServiceConfig | select-object -ExpandProperty executionTimeout).TotalSeconds
+    $clientMaxRequestLength = $clientWebServiceConfig | Select-Object -ExpandProperty maxRequestLength
+    $clientExecutionTimeout = ($clientWebServiceConfig | Select-Object -ExpandProperty executionTimeout).TotalSeconds
 
     # Return hash of IIS settings
     @{
-        QueueLength              = $queueLength
-        LoadBalancerCapabilities = $loadBalancerCapabilities
-        CpuResetInterval         = $cpuResetInterval
-        RecyclingMemory          = $recyclingMemory
-        RecyclingPrivateMemory   = $recyclingPrivateMemory
-        ClientMaxRequestLength   = $clientMaxRequestLength
-        ClientExecutionTimeout   = $clientExecutionTimeout
+        QueueLength                  = $queueLength
+        LoadBalancerCapabilities     = $loadBalancerCapabilities
+        CpuResetInterval             = $cpuResetInterval
+        RecyclingMemory              = $recyclingMemory
+        RecyclingPrivateMemory       = $recyclingPrivateMemory
+        RecyclingRegularTimeInterval = $recyclingRegularTimeInterval
+        IdleTimeout                  = $idleTimeout
+        PingEnabled                  = $pingEnabled
+        ClientMaxRequestLength       = $clientMaxRequestLength
+        ClientExecutionTimeout       = $clientExecutionTimeout
     }
 }
 
@@ -732,6 +839,23 @@ function Update-WsusIISConfig ($settingKey, $recommendedValue) {
             Set-WebConfigurationProperty -PSPath $iisPath -Filter "system.web/httpRuntime" -Name "executionTimeout" -Value ([timespan]::FromSeconds($recommendedValue))
             Break
         }
+        'RecyclingRegularTimeInterval' {
+            # Regular Time Interval (periodic recycling)
+            Set-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "time" -AttributeValue ([timespan]::FromMinutes($recommendedValue))
+            Break
+        }
+        'IdleTimeout' {
+            # Idle Timeout
+            $wsusPoolProcessModelConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "processModel"
+            Set-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "idleTimeout" -AttributeValue ([timespan]::FromMinutes($recommendedValue))
+            Break
+        }
+        'PingEnabled' {
+            # Ping Enabled
+            $wsusPoolProcessModelConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "processModel"
+            Set-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "pingingEnabled" -AttributeValue $recommendedValue
+            Break
+        }
         Default {}
     }
 
@@ -739,8 +863,7 @@ function Update-WsusIISConfig ($settingKey, $recommendedValue) {
 }
 
 function Remove-Updates ($searchStrings, $updateProp, $force=$false) {
-    [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | Out-Null
-    $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer();
+    $wsusServer = Get-WsusServerInstance
     $scope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
     $updates = $wsusServer.GetUpdates($scope)
     $declinedCount = 0
@@ -868,6 +991,180 @@ function Disable-WsusDriverSync {
     Get-WsusClassification | Where-Object -FilterScript {$_.Classification.Title -Eq "Driver Sets"} | Set-WsusClassification -Disable
 }
 
+function Test-WsusUupMimeTypes {
+    <#
+    .SYNOPSIS
+    Checks and optionally adds UUP MIME types required for Windows 11 updates.
+
+    .DESCRIPTION
+    Windows 11 22H2+ requires .msu and .wim MIME types to be configured in IIS.
+    This function checks if they exist and can add them if missing.
+
+    .PARAMETER Fix
+    If specified, adds missing MIME types automatically.
+
+    .LINK
+    https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/plan/plan-your-wsus-deployment
+    #>
+    param(
+        [switch]$Fix
+    )
+
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
+
+    $requiredMimeTypes = @{
+        '.msu' = 'application/octet-stream'
+        '.wim' = 'application/x-ms-wim'
+    }
+
+    $missingTypes = @()
+
+    foreach ($ext in $requiredMimeTypes.Keys) {
+        $existing = Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+            -Filter "system.webServer/staticContent/mimeMap[@fileExtension='$ext']" `
+            -Name "mimeType" -ErrorAction SilentlyContinue
+
+        if (-not $existing) {
+            $missingTypes += $ext
+            Write-Host "MIME type missing: $ext" -ForegroundColor Yellow
+        } else {
+            Write-Host "MIME type OK: $ext ($existing)" -ForegroundColor Green
+        }
+    }
+
+    if ($missingTypes.Count -gt 0 -and $Fix) {
+        foreach ($ext in $missingTypes) {
+            try {
+                Add-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+                    -Filter "system.webServer/staticContent" `
+                    -Name "." `
+                    -Value @{fileExtension=$ext; mimeType=$requiredMimeTypes[$ext]}
+                Write-Host "Added MIME type: $ext" -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "Failed to add MIME type $ext : $_"
+            }
+        }
+    }
+    elseif ($missingTypes.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Missing MIME types detected. Run with -Fix to add them, or add manually in IIS." -ForegroundColor Yellow
+        Write-Host "These are required for Windows 11 22H2+ UUP updates." -ForegroundColor Yellow
+    }
+
+    return $missingTypes.Count -eq 0
+}
+
+function Get-WsusHealthStatus {
+    <#
+    .SYNOPSIS
+    Performs health checks on the WSUS server and database.
+
+    .DESCRIPTION
+    Runs various health checks including:
+    - Superseded update count (warning if >1500)
+    - Database size
+    - Content folder size
+    - SSL configuration status
+    - Update statistics
+
+    .LINK
+    https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/wsus-maintenance-guide
+    #>
+
+    Write-Host "================ WSUS HEALTH CHECK ================" -BackgroundColor Blue -ForegroundColor White
+    Write-Host ""
+
+    # Get WSUS configuration from registry
+    $wsusSetup = Get-ItemProperty -Path "HKLM:\Software\Microsoft\Update Services\Server\Setup" -ErrorAction SilentlyContinue
+
+    # SSL Status Check
+    Write-Host "[SSL Configuration]" -ForegroundColor Cyan
+    if ($wsusSetup -and $wsusSetup.PSObject.Properties.Name -contains "UsingSSL") {
+        if ($wsusSetup.UsingSSL) {
+            Write-Host "  SSL: Enabled" -ForegroundColor Green
+        } else {
+            Write-Host "  SSL: Not configured (recommended for security)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  SSL: Not configured" -ForegroundColor Yellow
+    }
+
+    # Port Info
+    if ($wsusSetup -and $wsusSetup.PSObject.Properties.Name -contains "PortNumber") {
+        Write-Host "  Port: $($wsusSetup.PortNumber)" -ForegroundColor White
+    }
+    Write-Host ""
+
+    # Content Folder Size
+    Write-Host "[Storage]" -ForegroundColor Cyan
+    if ($wsusSetup -and $wsusSetup.PSObject.Properties.Name -contains "ContentDir") {
+        $contentDir = $wsusSetup.ContentDir
+        if (Test-Path $contentDir) {
+            $contentSize = (Get-ChildItem -Path $contentDir -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+            $contentSizeGB = [math]::Round($contentSize / 1GB, 2)
+            Write-Host "  Content Folder: $contentDir" -ForegroundColor White
+            Write-Host "  Content Size: $contentSizeGB GB" -ForegroundColor White
+        }
+    }
+
+    # Database Info
+    $wsusSqlServerName = $wsusSetup.SqlServername
+    Write-Host "  Database: $wsusSqlServerName" -ForegroundColor White
+    Write-Host ""
+
+    # Update Statistics from Database
+    Write-Host "[Update Statistics]" -ForegroundColor Cyan
+
+    # Determine server instance for SQL queries
+    switch -Regex ($wsusSqlServerName) {
+        'SQLEXPRESS' { $serverInstance = 'np:\\.\pipe\MSSQL$SQLEXPRESS\sql\query'; break }
+        '##WID' { $serverInstance = 'np:\\.\pipe\MICROSOFT##WID\tsql\query'; break }
+        '##SSEE' { $serverInstance = 'np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query'; break }
+        default { $serverInstance = $wsusSqlServerName }
+    }
+
+    try {
+        $statsQuery = @"
+SELECT
+    (SELECT COUNT(*) FROM vwMinimalUpdate) AS TotalUpdates,
+    (SELECT COUNT(*) FROM vwMinimalUpdate WHERE declined=0) AS LiveUpdates,
+    (SELECT COUNT(*) FROM vwMinimalUpdate WHERE IsSuperseded=1) AS Superseded,
+    (SELECT COUNT(*) FROM vwMinimalUpdate WHERE IsSuperseded=1 AND declined=0) AS SupersededNotDeclined,
+    (SELECT COUNT(*) FROM vwMinimalUpdate WHERE declined=1) AS Declined
+"@
+        $stats = Invoke-Sqlcmd -Query $statsQuery -ServerInstance $serverInstance -QueryTimeout 60 -Encrypt Optional
+
+        Write-Host "  Total Updates: $($stats.TotalUpdates)" -ForegroundColor White
+        Write-Host "  Live Updates: $($stats.LiveUpdates)" -ForegroundColor White
+        Write-Host "  Superseded: $($stats.Superseded)" -ForegroundColor White
+        Write-Host "  Declined: $($stats.Declined)" -ForegroundColor White
+
+        # Check superseded but not declined (warning threshold: 1500)
+        $supersededNotDeclined = $stats.SupersededNotDeclined
+        if ($supersededNotDeclined -gt 1500) {
+            Write-Host "  Superseded (not declined): $supersededNotDeclined" -ForegroundColor Red
+            Write-Host "  WARNING: More than 1500 superseded updates not declined!" -ForegroundColor Red
+            Write-Host "  This can cause client scanning issues. Run -OptimizeServer to clean up." -ForegroundColor Red
+        } elseif ($supersededNotDeclined -gt 500) {
+            Write-Host "  Superseded (not declined): $supersededNotDeclined" -ForegroundColor Yellow
+        } else {
+            Write-Host "  Superseded (not declined): $supersededNotDeclined" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Warning "Could not query database statistics: $_"
+    }
+
+    Write-Host ""
+
+    # UUP MIME Types Check
+    Write-Host "[UUP MIME Types (Windows 11)]" -ForegroundColor Cyan
+    Test-WsusUupMimeTypes | Out-Null
+
+    Write-Host ""
+    Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+}
 
 function Unblock-WebConfigAcl {
     <#
@@ -973,8 +1270,7 @@ function Decline-SupersededUpdates ($verbose){
     UpdateCollection - https://docs.microsoft.com/en-us/previous-versions/windows/desktop/ms752803(v=vs.85)
     #>
     $declineCount = 0
-    [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | Out-Null
-    $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer();
+    $wsusServer = Get-WsusServerInstance
     $scope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
 
     $scope.ApprovedStates = "LatestRevisionApproved"
@@ -1055,5 +1351,11 @@ switch($true) {
     }
     ($OptimizeDatabase) {
         Optimize-WsusDatabase
+    }
+    ($HealthCheck) {
+        Get-WsusHealthStatus
+    }
+    ($FixUupMimeTypes) {
+        Test-WsusUupMimeTypes -Fix
     }
 }
