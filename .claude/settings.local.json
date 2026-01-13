@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(powershell.exe -Command \"Get-Command gh -ErrorAction SilentlyContinue\")",
+      "Bash(powershell.exe -Command \"where.exe gh\")",
+      "Bash(powershell.exe -Command \"Test-Path ''C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe''\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe'' api repos/lusoris/Optimize-WsusServer -X PATCH -f default_branch=main\")",
+      "Bash(git checkout:*)",
+      "Bash(git rebase:*)",
+      "Bash(powershell.exe -Command \"Select-String -Path Optimize-WsusServer.ps1 -Pattern ''<<<<<<<|======='' | Select-Object -First 10\")",
+      "Bash(powershell.exe -Command:*)",
+      "Bash(powershell.exe -File - <<'PSSCRIPT'\nGet-ChildItem -Path . -Filter *.ps1 -Recurse | ForEach-Object {\n    $file = $_.FullName\n    $errors = $null\n    $null = [System.Management.Automation.Language.Parser]::ParseFile\\($file, [ref]$null, [ref]$errors\\)\n    if \\($errors\\) {\n        Write-Host \"ERRORS in $\\($_.Name\\):\" -ForegroundColor Red\n        $errors | ForEach-Object { Write-Host \"  Line $\\($_.Extent.StartLineNumber\\): $\\($_.Message\\)\" }\n    } else {\n        Write-Host \"OK: $\\($_.Name\\)\" -ForegroundColor Green\n    }\n}\nPSSCRIPT)",
+      "Bash(powershell.exe -NoProfile -Command \"& { Get-ChildItem -Path ''.'' -Filter ''*.ps1'' -Recurse | ForEach-Object { Write-Host $_Name } }\")",
+      "Bash(powershell.exe -NoProfile -Command \"$errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile\\(''c:\\\\Users\\\\ms\\\\dev\\\\Optimize-WsusServer\\\\Optimize-WsusServer.ps1'', [ref]$null, [ref]$errors\\); if \\($errors\\) { $errors | ForEach-Object { Write-Host \\(''Line '' + $_Extent.StartLineNumber + '': '' + $_Message\\) } } else { Write-Host ''Optimize-WsusServer.ps1: OK'' }\")",
+      "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"c:\\\\Users\\\\ms\\\\dev\\\\Optimize-WsusServer\\\\check-syntax.ps1\")",
+      "Bash(git merge:*)"
+    ]
+  }
+}

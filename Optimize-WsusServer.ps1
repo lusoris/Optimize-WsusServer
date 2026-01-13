@@ -260,17 +260,20 @@ function Write-ProgressStatus {
 
     if ($Completed) {
         Write-Progress -Activity $Activity -Id $Id -Completed
-    }
-    elseif ($PercentComplete -ge 0) {
+    } elseif ($PercentComplete -ge 0) {
         Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete -Id $Id
-    }
-    else {
+    } else {
         Write-Progress -Activity $Activity -Status $Status -Id $Id
     }
 }
 
 # Store Quiet parameter at script scope for helper functions
 $script:Quiet = $Quiet
+
+# Initialize IIS path early for use by IIS configuration functions
+# This allows functions like Get-WsusIISConfig, Update-WsusIISConfig, and Unblock-WebConfigAcl
+# to be called at any point without depending on late initialization (Issue #1)
+$script:IISPath = Get-WsusIISLocalizedNamespacePath
 
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
@@ -279,16 +282,16 @@ $script:Quiet = $Quiet
 # - https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/windows-server-update-services-best-practices
 # - https://www.reddit.com/r/sysadmin/comments/996xul/getting_2016_updates_to_work_on_wsus/
 $recommendedIISSettings = @{
-    QueueLength              = 25000   # Default: 1000, MS recommends 2000+
-    LoadBalancerCapabilities = 'TcpLevel'
-    CpuResetInterval         = 15
-    RecyclingMemory          = 0       # Disable virtual memory limit
-    RecyclingPrivateMemory   = 0       # Disable private memory limit (default: 1843200)
+    QueueLength                  = 25000   # Default: 1000, MS recommends 2000+
+    LoadBalancerCapabilities     = 'TcpLevel'
+    CpuResetInterval             = 15
+    RecyclingMemory              = 0       # Disable virtual memory limit
+    RecyclingPrivateMemory       = 0       # Disable private memory limit (default: 1843200)
     RecyclingRegularTimeInterval = 0   # Disable periodic recycling (default: 1740 = 29h)
-    IdleTimeout              = 0       # Disable idle timeout (default: 20 min)
-    PingEnabled              = $false  # Disable ping
-    ClientMaxRequestLength   = 204800
-    ClientExecutionTimeout   = 7200
+    IdleTimeout                  = 0       # Disable idle timeout (default: 20 min)
+    PingEnabled                  = $false  # Disable ping
+    ClientMaxRequestLength       = 204800
+    ClientExecutionTimeout       = 7200
 }
 
 <#
@@ -587,19 +590,16 @@ function Get-WsusServerInstance {
         # Try connecting with detected settings
         $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $useSSL, $portNumber)
         return $wsusServer
-    }
-    catch {
+    } catch {
         # Fallback: try without SSL first, then with SSL
         try {
             $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $false, 8530)
             return $wsusServer
-        }
-        catch {
+        } catch {
             try {
                 $wsusServer = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer("localhost", $true, 8531)
                 return $wsusServer
-            }
-            catch {
+            } catch {
                 Write-Error "Failed to connect to WSUS server. Please verify WSUS is running and accessible."
                 throw
             }
@@ -628,6 +628,68 @@ function Confirm-Prompt ($prompt) {
         return $true
     } else {
         return $false
+    }
+}
+
+function Get-WsusSqlServerInstance {
+    <#
+    .SYNOPSIS
+    Converts WSUS SQL server name to appropriate connection instance string.
+
+    .DESCRIPTION
+    Determines the correct SQL Server instance connection string based on WSUS
+    database type (SQL Express, WID, SSEE, or named instance).
+
+    .PARAMETER SqlServerName
+    The SQL server name from WSUS registry configuration
+
+    .EXAMPLE
+    $instance = Get-WsusSqlServerInstance "##WID"
+    # Returns: 'np:\\.\pipe\MICROSOFT##WID\tsql\query'
+
+    .OUTPUTS
+    String: The connection instance string for use with Invoke-Sqlcmd
+
+    .NOTES
+    This function eliminates duplicate SQL instance detection code across
+    multiple functions (Issue #3 - Tech Debt).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SqlServerName
+    )
+
+    switch -Regex ($SqlServerName) {
+        'SQLEXPRESS' { return 'np:\\.\pipe\MSSQL$SQLEXPRESS\sql\query' }
+        '##WID' { return 'np:\\.\pipe\MICROSOFT##WID\tsql\query' }
+        '##SSEE' { return 'np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query' }
+        default { return $SqlServerName }
+    }
+}
+
+function Get-ActiveWsusServer {
+    <#
+    .SYNOPSIS
+    Gets the active WSUS server connection (local or remote).
+
+    .DESCRIPTION
+    Returns the remote WSUS server connection if specified via -WsusServer parameter,
+    otherwise returns the local WSUS server instance. This ensures all WSUS operations
+    use the same connection and respects the remote server override.
+
+    .OUTPUTS
+    Microsoft.UpdateServices.Administration.IUpdateServer
+
+    .NOTES
+    This wrapper function fixes Issue #2 (remote WSUS support) by providing a single
+    connection point that all functions should use instead of calling Get-WsusServerInstance
+    directly.
+    #>
+
+    if ($script:WsusConnection) {
+        return $script:WsusConnection
+    } else {
+        return Get-WsusServerInstance
     }
 }
 
@@ -680,7 +742,8 @@ function Optimize-WsusDatabase {
     Runs WSUS database optimization.
 
     .DESCRIPTION
-    Runs Microsoft's recommended WSUS database optimization.
+    Runs Microsoft's recommended WSUS database optimization including custom
+    index creation and fragmentation repair.
 
     .LINK
     https://support.microsoft.com/en-us/help/4490644/complete-guide-to-microsoft-wsus-and-configuration-manager-sup-maint
@@ -690,27 +753,42 @@ function Optimize-WsusDatabase {
     #>
 
     # Check registry for WSUS database install type (SQL or WID)
-    $wsusSqlServerName = (get-itemproperty "HKLM:\Software\Microsoft\Update Services\Server\Setup" -Name "SqlServername").SqlServername
+    $wsusSqlServerName = (Get-ItemProperty "HKLM:\Software\Microsoft\Update Services\Server\Setup" -Name "SqlServername").SqlServername
 
-    # Set the named pipe to use based on WSUS db type
-    switch -Regex ($wsusSqlServerName) {
-        'SQLEXPRESS' { $serverInstance = 'np:\\.\pipe\MSSQL$SQLEXPRESS\sql\query'; break }
-        '##WID' { $serverInstance = 'np:\\.\pipe\MICROSOFT##WID\tsql\query'; break }
-        '##SSEE' { $serverInstance = 'np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query'; break }
-        default { $serverInstance = $wsusSqlServerName }
-    }
+    # Get the named pipe to use based on WSUS db type (Fixed: use helper function to eliminate duplication)
+    $serverInstance = Get-WsusSqlServerInstance -SqlServerName $wsusSqlServerName
 
     # Setting query timeout value because both of these scripts are prone to timeout
     # https://devblogs.microsoft.com/scripting/10-tips-for-the-sql-server-powershell-scripter/
 
-    Write-Host "Creating custom indexes in WSUS index if they don't already exist. This will speed up future database optimizations."
+    Write-Host "Creating custom indexes in WSUS database if they don't already exist. This will speed up future database optimizations."
+
     # Create custom indexes in the database if they don't already exist
     # -Encrypt Optional fixes compatibility with SqlServer module >21.x (Issue #25, #26, #31)
-    Invoke-Sqlcmd -Query $createCustomIndexesSQLQuery -ServerInstance $serverInstance -QueryTimeout 120 -Encrypt Optional
+    try {
+        Invoke-Sqlcmd -Query $createCustomIndexesSQLQuery -ServerInstance $serverInstance -QueryTimeout 120 -Encrypt Optional
+        Write-Log "Custom indexes created/verified successfully" -Level Success
+    } catch {
+        Write-Log "Failed to create custom indexes: $_" -Level Error
+        Write-Status -Message "Custom index creation failed. Check database connectivity." -Type Warning
+        if ($PSCmdlet.ShouldProcess("Continue")) {
+            # Continue with maintenance even if indexes fail
+        } else {
+            return
+        }
+    }
 
     Write-Host "Running WSUS SQL database maintenance script. This can take an extremely long time on the first run."
+
     # Run the WSUS SQL database maintenance script
-    Invoke-Sqlcmd -Query $wsusDBMaintenanceSQLQuery -ServerInstance $serverInstance -QueryTimeout 40000 -Encrypt Optional
+    try {
+        Invoke-Sqlcmd -Query $wsusDBMaintenanceSQLQuery -ServerInstance $serverInstance -QueryTimeout 40000 -Encrypt Optional
+        Write-Log "Database maintenance completed successfully" -Level Success
+    } catch {
+        Write-Log "Database maintenance failed: $_" -Level Error
+        Write-Status -Message "Database maintenance failed. Please review logs and retry." -Type Error
+        throw
+    }
 }
 
 function New-WsusMaintenanceTask($interval) {
@@ -732,7 +810,7 @@ function New-WsusMaintenanceTask($interval) {
     $scriptPath = 'C:\Scripts'
 
     # Delete scheduled task with the same name if it already exists
-    If (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
         Write-Host "Unregistered Schedule Task: $taskName"
     }
@@ -742,14 +820,14 @@ function New-WsusMaintenanceTask($interval) {
         'Daily' {
             $trigger = New-ScheduledTaskTrigger -Daily -At "12pm"
             $scriptAction = "-OptimizeServer"
-            Break
+            break
         }
         'Weekly' {
             $trigger = New-ScheduledTaskTrigger -Weekly -At "2am" -DaysOfWeek Sunday
             $scriptAction = "-OptimizeDatabase"
-            Break
+            break
         }
-        Default {}
+        default {}
     }
 
     $scriptName = Split-Path $MyInvocation.PSCommandPath -Leaf
@@ -798,7 +876,7 @@ function Get-WsusIISConfig {
     $iisSiteIndex = Get-ItemPropertyValue "HKLM:\Software\Microsoft\Update Services\Server\Setup" -Name "IISTargetWebSiteIndex"
 
     # IIS Site
-    $iisSiteName = Get-IISSite | Where-Object -Property "Id" -Eq $iisSiteIndex | Select-Object -ExpandProperty "Name"
+    $iisSiteName = Get-IISSite | Where-Object -Property "Id" -EQ $iisSiteIndex | Select-Object -ExpandProperty "Name"
 
     # Site Application Pool
     $iisAppPool = Get-WebApplication -site $iisSiteName -Name "ClientWebService" | Select-Object -ExpandProperty "applicationPool"
@@ -834,7 +912,7 @@ function Get-WsusIISConfig {
     $idleTimeout = (Get-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "idleTimeout").TotalMinutes
     $pingEnabled = Get-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "pingingEnabled"
 
-    $clientWebServiceConfig = Get-WebConfiguration -PSPath $iisPath -Filter "system.web/httpRuntime"
+    $clientWebServiceConfig = Get-WebConfiguration -PSPath $script:IISPath -Filter "system.web/httpRuntime"
 
     $clientMaxRequestLength = $clientWebServiceConfig | Select-Object -ExpandProperty maxRequestLength
     $clientExecutionTimeout = ($clientWebServiceConfig | Select-Object -ExpandProperty executionTimeout).TotalSeconds
@@ -923,14 +1001,13 @@ function Test-WsusIISConfig ($settings, $recommended) {
     foreach ($key in $recommended.Keys) {
         # If the current configuration setting doesn't match the recommended value, prompt the user to update
         # This could be better designed to match minimum requirements instead of specific values, but it isn't.
-        If ($recommended[$key] -ne $settings[$key]) {
+        if ($recommended[$key] -ne $settings[$key]) {
             Write-Host "$key`n`tCurrent:`t$($settings[$key])`n`tRecommended:`t$($recommended[$key])" -BackgroundColor Black -ForegroundColor Red
 
             if (Confirm-Prompt "Update $key to recommended value?") {
                 Update-WsusIISConfig $key $recommended[$key]
             }
-        }
-        else {
+        } else {
             Write-Host "$key`n`tCurrent:`t$($settings[$key])`n`tRecommended:`t$($recommended[$key])" -BackgroundColor Black -ForegroundColor Green
         }
     }
@@ -965,8 +1042,7 @@ function Update-WsusIISConfig {
     # WhatIf support
     if ($PSCmdlet.ShouldProcess("IIS Setting: $settingKey", "Set to $recommendedValue")) {
         Write-Verbose "Updating IIS setting '$settingKey' to '$recommendedValue'"
-    }
-    else {
+    } else {
         return
     }
 
@@ -974,7 +1050,7 @@ function Update-WsusIISConfig {
     $iisSiteIndex = Get-ItemPropertyValue "HKLM:\Software\Microsoft\Update Services\Server\Setup" -Name "IISTargetWebSiteIndex"
 
     # IIS Site
-    $iisSiteName = Get-IISSite | Where-Object -Property "Id" -Eq $iisSiteIndex | Select-Object -ExpandProperty "Name"
+    $iisSiteName = Get-IISSite | Where-Object -Property "Id" -EQ $iisSiteIndex | Select-Object -ExpandProperty "Name"
 
     # Site Application Pool
     $iisAppPool = Get-WebApplication -site $iisSiteName -Name "ClientWebService" | Select-Object -ExpandProperty "applicationPool"
@@ -992,7 +1068,7 @@ function Update-WsusIISConfig {
         'QueueLength' {
             # Queue Length
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolConfig -AttributeName "queueLength" -AttributeValue $recommendedValue
-            Break
+            break
         }
         'LoadBalancerCapabilities' {
             # Failure Config Root
@@ -1000,107 +1076,106 @@ function Update-WsusIISConfig {
 
             # Load Balancer Capabilities
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolFailureConfig -AttributeName "loadBalancerCapabilities" -AttributeValue $recommendedValue
-            Break
+            break
         }
         'CpuResetInterval' {
             # CPU Reset Interval
             $wsusPoolCpuConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "cpu"
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolCpuConfig -AttributeName "resetInterval" -AttributeValue ([timespan]::FromMinutes($recommendedValue))
-            Break
+            break
         }
         'RecyclingMemory' {
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "memory" -AttributeValue $recommendedValue
-            Break
+            break
         }
         'RecyclingPrivateMemory' {
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "privateMemory" -AttributeValue $recommendedValue
-            Break
+            break
         }
         'ClientMaxRequestLength' {
             # Check if the IIS WSUS Client Web Service web.config is read only and make it RW if so
             Unblock-WebConfigAcl
-            Set-WebConfigurationProperty -PSPath $iisPath -Filter "system.web/httpRuntime" -Name "maxRequestLength" -Value $recommendedValue
-            Break
+            Set-WebConfigurationProperty -PSPath $script:IISPath -Filter "system.web/httpRuntime" -Name "maxRequestLength" -Value $recommendedValue
+            break
         }
         'ClientExecutionTimeout' {
             # Check if the IIS WSUS Client Web Service web.config is read only and make it RW if so
             Unblock-WebConfigAcl
-            Set-WebConfigurationProperty -PSPath $iisPath -Filter "system.web/httpRuntime" -Name "executionTimeout" -Value ([timespan]::FromSeconds($recommendedValue))
-            Break
+            Set-WebConfigurationProperty -PSPath $script:IISPath -Filter "system.web/httpRuntime" -Name "executionTimeout" -Value ([timespan]::FromSeconds($recommendedValue))
+            break
         }
         'RecyclingRegularTimeInterval' {
             # Regular Time Interval (periodic recycling)
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolRecyclingConfig -AttributeName "time" -AttributeValue ([timespan]::FromMinutes($recommendedValue))
-            Break
+            break
         }
         'IdleTimeout' {
             # Idle Timeout
             $wsusPoolProcessModelConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "processModel"
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "idleTimeout" -AttributeValue ([timespan]::FromMinutes($recommendedValue))
-            Break
+            break
         }
         'PingEnabled' {
             # Ping Enabled
             $wsusPoolProcessModelConfig = Get-IISConfigElement -ConfigElement $wsusPoolConfig -ChildElementName "processModel"
             Set-IISConfigAttributeValue -ConfigElement $wsusPoolProcessModelConfig -AttributeName "pingingEnabled" -AttributeValue $recommendedValue
-            Break
+            break
         }
-        Default {}
+        default {}
     }
 
     Write-Host "Updated IIS Setting: $settingKey, $recommendedValue" -BackgroundColor Green -ForegroundColor Black
 }
 
-function Remove-Updates ($searchStrings, $updateProp, $force=$false) {
-    $wsusServer = Get-WsusServerInstance
+function Remove-Updates ($searchStrings, $updateProp, $force = $false) {
+    $wsusServer = Get-ActiveWsusServer
     $scope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
     $updates = $wsusServer.GetUpdates($scope)
     $declinedCount = 0
     $searchCount = 0
     $userMsg = 'Found'
-    $color = 'Yellow'
+    $statusType = 'Warning'
 
     if ($force) {
         $userMsg = 'Declined'
-        $color = 'DarkGreen'
+        $statusType = 'Success'
     }
 
-    Write-Host "Update Property: $updateProp"
+    Write-Status -Message "Update Property: $updateProp" -Type Info
 
-    foreach ($searchString in $searchStrings)
-    {
+    foreach ($searchString in $searchStrings) {
         $confirm = $false
-        Write-Host " - Update Search: $searchString"
+        Write-Status -Message " - Update Search: $searchString" -Type Info
         $searchCount = 0
-        foreach ($update in $updates){
-            if ($update.$($updateProp) -match "$searchString"){
-                if($update.IsApproved){
+        foreach ($update in $updates) {
+            if ($update.$($updateProp) -match "$searchString") {
+                if ($update.IsApproved) {
 
-                    if ($force){
+                    if ($force) {
                         $update.Decline()
                     }
                     $searchCount = $searchCount + 1
-                    Write-Host "   [*]$($userMsg): $($update.Title), $($update.ProductTitles) ($searchString)" -ForegroundColor $color
+                    Write-Status -Message "   [*]$($userMsg): $($update.Title), $($update.ProductTitles) ($searchString)" -Type $statusType
                 }
             }
         }
 
         if ($searchCount -gt 0) {
-            Write-Host "$searchCount `"$searchString`" Updates $userMsg!" -ForegroundColor "Blue" -BackgroundColor White
+            Write-Status -Message "$searchCount `"$searchString`" Updates $userMsg!" -Type Info
         } else {
-            Write-Host "      $searchCount `"$searchString`" Updates $userMsg" -ForegroundColor "White"
+            Write-Status -Message "      $searchCount `"$searchString`" Updates $userMsg" -Type Info
         }
 
         #Prompt user to confirm declining updates. Do no prompt if force flag is enable to prevent loop
-        if ((-not $force) -and ($searchCount -ne 0)){
+        if ((-not $force) -and ($searchCount -ne 0)) {
             $confirm = Confirm-Prompt "Are you sure you want to decline all ($searchCount) listed ($searchString) updates?"
 
             if ($confirm) {
-                Remove-Updates @($searchString) $updateProp $true | out-null
+                Remove-Updates @($searchString) $updateProp $true | Out-Null
             }
         }
 
-        if (($confirm) -or $force){
+        if (($confirm) -or $force) {
             $declinedCount = ($declinedCount + $searchCount)
         }
     }
@@ -1176,8 +1251,8 @@ function Disable-WsusDriverSync {
     https://docs.microsoft.com/en-us/powershell/module/updateservices/set-wsusclassification?view=win10-ps
     #>
 
-    Get-WsusClassification | Where-Object -FilterScript {$_.Classification.Title -Eq "Drivers"} | Set-WsusClassification -Disable
-    Get-WsusClassification | Where-Object -FilterScript {$_.Classification.Title -Eq "Driver Sets"} | Set-WsusClassification -Disable
+    Get-WsusClassification | Where-Object -FilterScript { $_.Classification.Title -eq "Drivers" } | Set-WsusClassification -Disable
+    Get-WsusClassification | Where-Object -FilterScript { $_.Classification.Title -eq "Driver Sets" } | Set-WsusClassification -Disable
 }
 
 function Test-WsusUupMimeTypes {
@@ -1227,15 +1302,13 @@ function Test-WsusUupMimeTypes {
                 Add-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
                     -Filter "system.webServer/staticContent" `
                     -Name "." `
-                    -Value @{fileExtension=$ext; mimeType=$requiredMimeTypes[$ext]}
+                    -Value @{fileExtension = $ext; mimeType = $requiredMimeTypes[$ext] }
                 Write-Host "Added MIME type: $ext" -ForegroundColor Green
-            }
-            catch {
+            } catch {
                 Write-Warning "Failed to add MIME type $ext : $_"
             }
         }
-    }
-    elseif ($missingTypes.Count -gt 0) {
+    } elseif ($missingTypes.Count -gt 0) {
         Write-Host ""
         Write-Host "Missing MIME types detected. Run with -Fix to add them, or add manually in IIS." -ForegroundColor Yellow
         Write-Host "These are required for Windows 11 22H2+ UUP updates." -ForegroundColor Yellow
@@ -1340,8 +1413,7 @@ SELECT
         } else {
             Write-Host "  Superseded (not declined): $supersededNotDeclined" -ForegroundColor Green
         }
-    }
-    catch {
+    } catch {
         Write-Warning "Could not query database statistics: $_"
     }
 
@@ -1449,8 +1521,7 @@ function Get-VirtualMachineInfo {
             $result.Hypervisor = "Unknown (Hypervisor present)"
             return $result
         }
-    }
-    catch {
+    } catch {
         Write-Warning "Could not detect VM status: $_"
     }
 
@@ -1629,14 +1700,13 @@ function Invoke-LowStorageOptimization {
     # Check current express files setting
     $expressEnabled = $false
     try {
-        $wsusConfig = (Get-WsusServer).GetConfiguration()
+        $wsusConfig = (Get-ActiveWsusServer).GetConfiguration()
         $expressEnabled = $wsusConfig.DownloadExpressPackages
         $localContentCaching = -not $wsusConfig.DownloadUpdateBinariesAsNeeded
 
         Write-Host "  Express Installation Files: $(if ($expressEnabled) { 'Enabled (uses more space)' } else { 'Disabled' })" -ForegroundColor White
         Write-Host "  Local Content Caching: $(if ($localContentCaching) { 'Enabled (stores files locally)' } else { 'Disabled (clients download from MS)' })" -ForegroundColor White
-    }
-    catch {
+    } catch {
         Write-Warning "Could not query current WSUS settings: $_"
     }
 
@@ -1665,9 +1735,8 @@ function Invoke-LowStorageOptimization {
     if ($applyChanges) {
         Write-Host ""
         Write-Host "Applying storage-saving configuration..." -ForegroundColor Cyan
-
         try {
-            $wsusServer = Get-WsusServer
+            $wsusServer = Get-ActiveWsusServer
             $wsusConfig = $wsusServer.GetConfiguration()
 
             # Disable express installation files
@@ -1690,12 +1759,10 @@ function Invoke-LowStorageOptimization {
             Write-Host "  1. Run -OptimizeServer to clean up existing cached content" -ForegroundColor White
             Write-Host "  2. Run -DisableDrivers if you don't need driver updates" -ForegroundColor White
             Write-Host "  3. Review approved products and remove unused categories" -ForegroundColor White
-        }
-        catch {
+        } catch {
             Write-Error "Failed to apply configuration: $_"
         }
-    }
-    else {
+    } else {
         Write-Host ""
         Write-Host "No changes made." -ForegroundColor Yellow
     }
@@ -1737,9 +1804,9 @@ function Write-Log {
 
     # Console output with colors
     switch ($Level) {
-        'Info'    { Write-Host $Message -ForegroundColor White }
+        'Info' { Write-Host $Message -ForegroundColor White }
         'Warning' { Write-Host $Message -ForegroundColor Yellow }
-        'Error'   { Write-Host $Message -ForegroundColor Red }
+        'Error' { Write-Host $Message -ForegroundColor Red }
         'Success' { Write-Host $Message -ForegroundColor Green }
     }
 
@@ -1878,8 +1945,7 @@ This is an automated message from Optimize-WsusServer.ps1
     try {
         Send-MailMessage @mailParams
         Write-Log "Email report sent to $To" -Level Success
-    }
-    catch {
+    } catch {
         Write-Log "Failed to send email report: $_" -Level Error
     }
 }
@@ -1931,8 +1997,7 @@ function Get-WsusServerConnection {
         Write-Log "Connected to remote WSUS server successfully" -Level Success
 
         return $wsus
-    }
-    catch {
+    } catch {
         Write-Log "Failed to connect to WSUS server $ServerName`: $_" -Level Error
         throw
     }
@@ -1959,7 +2024,7 @@ function Invoke-AutoApproveUpdates {
     Write-Host ""
 
     try {
-        $wsusServer = Get-WsusServer
+        $wsusServer = Get-ActiveWsusServer
 
         # Get all computer groups
         $computerGroups = $wsusServer.GetComputerTargetGroups()
@@ -1980,11 +2045,9 @@ function Invoke-AutoApproveUpdates {
         $targetGroup = $null
         if ($groupChoice -eq 'all') {
             $targetGroup = $computerGroups | Where-Object { $_.Name -eq 'All Computers' }
-        }
-        elseif ($groupChoice -match '^\d+$' -and [int]$groupChoice -le $groupList.Count) {
+        } elseif ($groupChoice -match '^\d+$' -and [int]$groupChoice -le $groupList.Count) {
             $targetGroup = $groupList[[int]$groupChoice - 1]
-        }
-        else {
+        } else {
             Write-Host "Invalid selection." -ForegroundColor Red
             return
         }
@@ -2011,8 +2074,7 @@ function Invoke-AutoApproveUpdates {
         $selectedClassifications = @()
         if ($useDefaults) {
             $selectedClassifications = $defaultClassifications
-        }
-        else {
+        } else {
             $allClassifications = $wsusServer.GetUpdateClassifications()
             Write-Host ""
             Write-Host "Available classifications:" -ForegroundColor White
@@ -2083,8 +2145,7 @@ function Invoke-AutoApproveUpdates {
                     $update.Approve([Microsoft.UpdateServices.Administration.UpdateApprovalAction]::Install, $targetGroup) | Out-Null
                     $approved++
                     Write-Host "  Approved: $($update.Title)" -ForegroundColor Green
-                }
-                catch {
+                } catch {
                     $failed++
                     Write-Host "  Failed: $($update.Title) - $_" -ForegroundColor Red
                 }
@@ -2093,12 +2154,10 @@ function Invoke-AutoApproveUpdates {
             Write-Host ""
             Write-Host "Approval complete: $approved approved, $failed failed" -ForegroundColor Cyan
             Write-Log "Auto-approved $approved updates for group '$($targetGroup.Name)'" -Level Success
-        }
-        else {
+        } else {
             Write-Host "No updates approved." -ForegroundColor Yellow
         }
-    }
-    catch {
+    } catch {
         Write-Host "Error during auto-approve: $_" -ForegroundColor Red
         Write-Log "Auto-approve failed: $_" -Level Error
     }
@@ -2120,7 +2179,7 @@ function Unblock-WebConfigAcl {
     https://docs.microsoft.com/en-us/dotnet/api/system.security.principal.securityidentifier.-ctor?view=windowsdesktop-5.0#System_Security_Principal_SecurityIdentifier__ctor_System_String_
     #>
 
-    $wsusWebConfigPath = Get-WebConfigFile -PSPath $iisPath | Select-Object -ExpandProperty 'FullName'
+    $wsusWebConfigPath = Get-WebConfigFile -PSPath $script:IISPath | Select-Object -ExpandProperty 'FullName'
 
     # Get localized BUILTIN\Administrators group
     $builtinAdminGroup = ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value
@@ -2193,7 +2252,7 @@ function Set-FileAclPermissions ($file, $accString, $rights, $inheritanceFlags, 
     Set-Acl -Path $file -AclObject $acl
 }
 
-function Decline-SupersededUpdates ($verbose){
+function Decline-SupersededUpdates ($verbose) {
     <#
     .SYNOPSIS
     Declines approved updates that have been approved and are superseded by other updates.
@@ -2211,18 +2270,17 @@ function Decline-SupersededUpdates ($verbose){
     UpdateCollection - https://docs.microsoft.com/en-us/previous-versions/windows/desktop/ms752803(v=vs.85)
     #>
     $declineCount = 0
-    $wsusServer = Get-WsusServerInstance
+    $wsusServer = Get-ActiveWsusServer
     $scope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
 
     $scope.ApprovedStates = "LatestRevisionApproved"
     $updates = $wsusServer.GetUpdates($scope)
 
-    foreach ($update in $updates){
+    foreach ($update in $updates) {
         $updatesThatSupersede = $update.GetRelatedUpdates("UpdatesThatSupersedeThisUpdate")
-        if($updatesThatSupersede.Count -gt 0) {
-            foreach ($super in $updatesThatSupersede)
-            {
-                if ($super.IsApproved){
+        if ($updatesThatSupersede.Count -gt 0) {
+            foreach ($super in $updatesThatSupersede) {
+                if ($super.IsApproved) {
                     $update.Decline()
                     $declineCount++
                     break
@@ -2231,7 +2289,7 @@ function Decline-SupersededUpdates ($verbose){
         }
     }
 
-    if($verbose) {
+    if ($verbose) {
         Write-Host "Osbolete Updates Declined: $declineCount"
     } else {
         return $declineCount
@@ -2251,14 +2309,12 @@ if ($WsusServer) {
     $script:WsusConnection = Get-WsusServerConnection -ServerName $WsusServer -PortNumber $WsusPort -UseSSL:$UseSSL
 }
 
-$iisPath = Get-WsusIISLocalizedNamespacePath
-
 # Check commandline parameters.
-switch($true) {
+switch ($true) {
     ($FirstRun) {
         Write-Host "All of the following processes are highly recommended!" -ForegroundColor Blue -BackgroundColor White
 
-        switch($true) {
+        switch ($true) {
             (Confirm-Prompt "Run WSUS IIS configuration optimization?") {
                 $wsusIISConfig = Get-WsusIISConfig
                 Test-WsusIISConfig $wsusIISConfig $recommendedIISSettings
@@ -2279,7 +2335,7 @@ switch($true) {
                 Disable-WsusDriverSync
             }
         }
-        Break
+        break
     }
     ($DisableDrivers) {
         Disable-WsusDriverSync

@@ -210,6 +210,27 @@ This fork addresses the following issues from the original repository:
 | [#31](https://github.com/awarre/Optimize-WsusServer/issues/31) | SqlServer 22.3.0 missing invoke-sqlcmd | Works with latest SqlServer module |
 | [#33](https://github.com/awarre/Optimize-WsusServer/issues/33) | HTTP requests fail when SSL required | Added automatic SSL detection and fallback |
 
+## Known Issues in v2.0.0
+
+> **Note:** These are documented limitations for AI agents and contributors. Users should be aware:
+
+1. **Remote Server Parameter Incomplete** (`-WsusServer`)
+   - Parameter exists but many functions ignore the `-WsusServer` flag
+   - Workaround: Local execution only, or run separately for each server
+   - Issue: https://github.com/lusoris/Optimize-WsusServer/issues/TBD
+
+2. **IIS Config Functions Require Execution Context**
+   - Functions like `Get-WsusIISConfig`, `Update-WsusIISConfig` require `$iisPath` variable
+   - Must be called via main script execution, not standalone
+   - Workaround: Call via `.\Optimize-WsusServer.ps1 -CheckConfig`
+
+3. **Database Query Errors Not Logged**
+   - `Optimize-WsusDatabase` function lacks error handling
+   - Failures may not be obvious; enable `-Verbose` for details
+   - Workaround: Run `-HealthCheck` first to verify database connectivity
+
+For detailed information about these issues and development guidance, see [.github/copilot-instructions.md](.github/copilot-instructions.md).
+
 ## License
 
 Distributed under the MIT License. See `LICENSE` for more information.
