@@ -28,6 +28,8 @@ Free and open source: [MIT License](https://github.com/lusoris/Optimize-WsusServ
   * Update statistics with superseded count warning (>1500)
   * UUP MIME types check for Windows 11
 * **UUP MIME Types** (`-FixUupMimeTypes`) - Check and add missing .msu/.wim MIME types for Windows 11 22H2+
+* **VM Optimization** (`-OptimizeForVM`) - Detects hypervisor (Hyper-V, VMware, Proxmox/KVM, VirtualBox) and provides specific recommendations
+* **Low Storage Mode** (`-LowStorageMode`) - Configures WSUS for limited storage (download-on-demand from Microsoft)
 * **Extended IIS Settings** - Now validates IdleTimeout, PingEnabled, and RecyclingRegularTimeInterval
 * **SSL Support** - Automatic SSL detection for WSUS connections
 * **SqlServer Module Compatibility** - Works with SqlServer module >21.x
@@ -143,6 +145,31 @@ Creates scheduled tasks to run OptimizeServer nightly and OptimizeDatabase weekl
 ```
 
 Declines all updates that have been approved and are superseded by other updates.
+
+### VM Optimization (New)
+
+```powershell
+.\Optimize-WsusServer.ps1 -OptimizeForVM
+```
+
+Detects if running on a virtual machine and provides hypervisor-specific recommendations for:
+
+* **Hyper-V** - VHDX settings, NUMA spanning, dynamic memory
+* **VMware** - PVSCSI adapter, VMXNET3, VMware Tools
+* **Proxmox/QEMU/KVM** - VirtIO drivers, CPU type, QEMU Guest Agent
+* **VirtualBox** - Migration recommendations
+
+### Low Storage Mode (New)
+
+```powershell
+.\Optimize-WsusServer.ps1 -LowStorageMode
+```
+
+Configures WSUS for environments with limited storage by:
+
+* Disabling express installation files
+* Enabling download-on-demand (clients download from Microsoft Update)
+* Providing storage usage analysis and recommendations
 
 ## What's Fixed
 
