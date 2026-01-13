@@ -1,0 +1,45 @@
+# PowerShell
+*.psm1~
+*.ps1~
+
+# IDE / Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.idea/
+*.suo
+*.user
+*.sln.docstates
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Logs
+*.log
+logs/
+
+# Test results
+TestResults/
+*.trx
+
+# PSScriptAnalyzer output
+PSScriptAnalyzerResults.xml
+PSScriptAnalyzerResults.json
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# Backup files
+*.bak
+*.backup
+
+# Local development notes (keep briefing for now)
+# wsus-script-update-briefing.md

@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - '**.ps1'
+      - '**.psm1'
+      - '**.psd1'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - '**.ps1'
+      - '**.psm1'
+      - '**.psd1'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+
+          if ($results) {
+              $results | Format-Table -AutoSize
+              Write-Host ""
+              Write-Host "::error::PSScriptAnalyzer found $($results.Count) issue(s)"
+
+              # Count by severity
+              $errors = ($results | Where-Object Severity -eq 'Error').Count
+              $warnings = ($results | Where-Object Severity -eq 'Warning').Count
+              $info = ($results | Where-Object Severity -eq 'Information').Count
+
+              Write-Host "Errors: $errors, Warnings: $warnings, Information: $info"
+
+              # Fail only on errors
+              if ($errors -gt 0) {
+                  exit 1
+              }
+          } else {
+              Write-Host "No issues found by PSScriptAnalyzer"
+          }
+
+  syntax-check:
+    name: Syntax Check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check PowerShell Syntax
+        shell: pwsh
+        run: |
+          $hasErrors = $false
+          Get-ChildItem -Path . -Filter *.ps1 -Recurse | ForEach-Object {
+              $file = $_.FullName
+              $errors = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$null, [ref]$errors)
+
+              if ($errors) {
+                  Write-Host "::error file=$file::Syntax errors found in $($_.Name)"
+                  $errors | ForEach-Object {
+                      Write-Host "  Line $($_.Extent.StartLineNumber): $($_.Message)"
+                  }
+                  $hasErrors = $true
+              } else {
+                  Write-Host "OK: $($_.Name)"
+              }
+          }
+
+          if ($hasErrors) {
+              exit 1
+          }
+
+  pester-test:
+    name: Pester Tests
+    runs-on: windows-latest
+    if: ${{ hashFiles('Tests/*.Tests.ps1') != '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Pester Tests
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0
+
+          $config = New-PesterConfiguration
+          $config.Run.Path = './Tests'
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = './TestResults/results.xml'
+
+          Invoke-Pester -Configuration $config
