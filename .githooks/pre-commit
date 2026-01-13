@@ -1,0 +1,87 @@
+#!/bin/sh
+# Pre-commit hook for Optimize-WsusServer
+# Runs PSScriptAnalyzer on staged PowerShell files
+
+# Get list of staged .ps1 files
+STAGED_PS1=$(git diff --cached --name-only --diff-filter=ACM | grep '\.ps1$')
+
+if [ -z "$STAGED_PS1" ]; then
+    exit 0
+fi
+
+echo "Running PSScriptAnalyzer on staged PowerShell files..."
+
+# Run PSScriptAnalyzer via PowerShell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+    \$ErrorActionPreference = 'Stop'
+
+    # Check if PSScriptAnalyzer is installed
+    if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+        Write-Host 'Installing PSScriptAnalyzer...' -ForegroundColor Yellow
+        Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+    }
+
+    Import-Module PSScriptAnalyzer
+
+    \$files = '$STAGED_PS1' -split '\n' | Where-Object { \$_ }
+    \$hasErrors = \$false
+
+    foreach (\$file in \$files) {
+        if (Test-Path \$file) {
+            Write-Host \"Analyzing: \$file\" -ForegroundColor Cyan
+
+            # Syntax check first
+            \$syntaxErrors = \$null
+            \$null = [System.Management.Automation.Language.Parser]::ParseFile(
+                \$file, [ref]\$null, [ref]\$syntaxErrors
+            )
+
+            if (\$syntaxErrors) {
+                Write-Host \"  SYNTAX ERROR in \$file\" -ForegroundColor Red
+                \$syntaxErrors | ForEach-Object {
+                    Write-Host \"    Line \$(\$_.Extent.StartLineNumber): \$(\$_.Message)\" -ForegroundColor Red
+                }
+                \$hasErrors = \$true
+                continue
+            }
+
+            # PSScriptAnalyzer check
+            \$settingsFile = './PSScriptAnalyzerSettings.psd1'
+            if (Test-Path \$settingsFile) {
+                \$results = Invoke-ScriptAnalyzer -Path \$file -Settings \$settingsFile
+            } else {
+                \$results = Invoke-ScriptAnalyzer -Path \$file -Severity Error,Warning
+            }
+
+            \$errors = @(\$results | Where-Object Severity -eq 'Error')
+
+            if (\$errors.Count -gt 0) {
+                Write-Host \"  ERRORS found in \$file\" -ForegroundColor Red
+                \$errors | ForEach-Object {
+                    Write-Host \"    Line \$(\$_.Line): [\$(\$_.RuleName)] \$(\$_.Message)\" -ForegroundColor Red
+                }
+                \$hasErrors = \$true
+            }
+
+            \$warnings = @(\$results | Where-Object Severity -eq 'Warning')
+            if (\$warnings.Count -gt 0) {
+                Write-Host \"  Warnings in \$file\" -ForegroundColor Yellow
+                \$warnings | ForEach-Object {
+                    Write-Host \"    Line \$(\$_.Line): [\$(\$_.RuleName)] \$(\$_.Message)\" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
+    if (\$hasErrors) {
+        Write-Host ''
+        Write-Host 'Commit blocked due to PSScriptAnalyzer errors.' -ForegroundColor Red
+        Write-Host 'Fix the errors above and try again.' -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host ''
+    Write-Host 'PSScriptAnalyzer check passed.' -ForegroundColor Green
+"
+
+exit $?

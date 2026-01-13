@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate PowerShell Script
+        shell: pwsh
+        run: |
+          # Syntax check
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            "${{ github.workspace }}/Optimize-WsusServer.ps1",
+            [ref]$null,
+            [ref]$errors
+          )
+
+          if ($errors) {
+              Write-Error "Syntax errors found in Optimize-WsusServer.ps1"
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+          }
+
+          # PSScriptAnalyzer check
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+          $results = Invoke-ScriptAnalyzer -Path ./Optimize-WsusServer.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
+          $errors = ($results | Where-Object Severity -eq 'Error').Count
+
+          if ($errors -gt 0) {
+              $results | Format-Table -AutoSize
+              Write-Error "PSScriptAnalyzer found $errors error(s)"
+              exit 1
+          }
+
+          Write-Host "Script validation passed"
+
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          Write-Host "Version: $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify script version matches tag
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ steps.version.outputs.version }}"
+          $scriptContent = Get-Content ./Optimize-WsusServer.ps1 -Raw
+
+          if ($scriptContent -match "Version\s*=\s*['""]([^'""]+)['""]") {
+              $scriptVersion = $matches[1]
+              Write-Host "Script version: $scriptVersion"
+              Write-Host "Tag version: $tagVersion"
+
+              if ($scriptVersion -ne $tagVersion) {
+                  Write-Warning "Script version ($scriptVersion) does not match tag version ($tagVersion)"
+                  Write-Warning "Consider updating the script version before release"
+              }
+          }
+
+      - name: Generate release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $notes = @"
+          ## Optimize-WsusServer v${{ steps.version.outputs.version }}
+
+          ### Installation
+
+          1. Download ``Optimize-WsusServer.ps1`` from the assets below
+          2. Run in PowerShell 5.1 (not PowerShell 7):
+
+          ``````powershell
+          .\Optimize-WsusServer.ps1 -FirstRun
+          ``````
+
+          ### Requirements
+
+          - Windows Server 2016/2019/2022 with WSUS
+          - Windows PowerShell 5.1
+          - SqlServer PowerShell module
+          - Administrator privileges
+
+          ### Checksums
+
+          ``````
+          SHA256: $(Get-FileHash ./Optimize-WsusServer.ps1 -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+          ``````
+          "@
+
+          # Write to file for GitHub release
+          $notes | Out-File -FilePath release-notes.md -Encoding utf8
+          Write-Host $notes
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Optimize-WsusServer v${{ steps.version.outputs.version }}"
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            Optimize-WsusServer.ps1
+            LICENSE
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
