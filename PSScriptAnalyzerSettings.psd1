@@ -1,7 +1,7 @@
 @{
     # Use Severity when you want to limit the generated diagnostic records to a
     # temporary list or a specific set of rules
-    Severity = @('Error', 'Warning')
+    Severity = @('Error', 'Warning', 'Information')
 
     # Use IncludeRules when you want to run only a subset of the default rule set
     # IncludeRules = @()
@@ -9,20 +9,8 @@
     # Use ExcludeRules when you want to run most of the default set of rules except
     # for a few rules you wish to exclude
     ExcludeRules = @(
-        # Allow using aliases for brevity in certain cases
-        # 'PSAvoidUsingCmdletAliases',
-
         # Allow Write-Host for user interaction (this is an interactive script)
-        'PSAvoidUsingWriteHost',
-
-        # The original script uses unapproved verbs - we'll fix these separately
-        'PSUseApprovedVerbs',
-
-        # Allow positional parameters for common cmdlets
-        'PSAvoidUsingPositionalParameters',
-
-        # Allow empty catch blocks where intentional
-        # 'PSAvoidUsingEmptyCatchBlock'
+        'PSAvoidUsingWriteHost'
     )
 
     # Configure specific rules
