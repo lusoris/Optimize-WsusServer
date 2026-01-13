@@ -30,6 +30,10 @@ Free and open source: [MIT License](https://github.com/lusoris/Optimize-WsusServ
 * **UUP MIME Types** (`-FixUupMimeTypes`) - Check and add missing .msu/.wim MIME types for Windows 11 22H2+
 * **VM Optimization** (`-OptimizeForVM`) - Detects hypervisor (Hyper-V, VMware, Proxmox/KVM, VirtualBox) and provides specific recommendations
 * **Low Storage Mode** (`-LowStorageMode`) - Configures WSUS for limited storage (download-on-demand from Microsoft)
+* **Auto-Approve Updates** (`-AutoApproveUpdates`) - Interactive bulk approval of updates by classification
+* **Remote Server Support** (`-WsusServer`, `-WsusPort`, `-UseSSL`) - Connect to remote WSUS servers
+* **Logging** (`-LogPath`, `-LogRotateDays`) - File logging with automatic rotation
+* **Email Reports** (`-SmtpServer`, `-EmailTo`, `-EmailFrom`) - Send email reports after operations
 * **Extended IIS Settings** - Now validates IdleTimeout, PingEnabled, and RecyclingRegularTimeInterval
 * **SSL Support** - Automatic SSL detection for WSUS connections
 * **SqlServer Module Compatibility** - Works with SqlServer module >21.x
@@ -170,6 +174,27 @@ Configures WSUS for environments with limited storage by:
 * Disabling express installation files
 * Enabling download-on-demand (clients download from Microsoft Update)
 * Providing storage usage analysis and recommendations
+
+### Auto-Approve Updates (New)
+
+```powershell
+.\Optimize-WsusServer.ps1 -AutoApproveUpdates
+```
+
+Interactively approves unapproved updates for selected computer groups by classification (Critical, Security, Definition Updates, Update Rollups).
+
+### Remote Server & Logging (New)
+
+```powershell
+# Connect to remote WSUS server
+.\Optimize-WsusServer.ps1 -WsusServer wsus.contoso.com -WsusPort 8531 -UseSSL -HealthCheck
+
+# Enable logging with 14-day rotation
+.\Optimize-WsusServer.ps1 -OptimizeServer -LogPath C:\Logs\WSUS -LogRotateDays 14
+
+# Send email report after optimization
+.\Optimize-WsusServer.ps1 -OptimizeServer -LogPath C:\Logs\WSUS -SmtpServer smtp.contoso.com -EmailTo admin@contoso.com -EmailFrom wsus@contoso.com
+```
 
 ## What's Fixed
 
