@@ -7,9 +7,9 @@
 .DESCRIPTION
     Comprehensive Windows Server Update Services (WSUS) configuration and optimization script.
     Features:
-        -Deep cleaning search and removal of unnecessary updates and drives by product title and update title.
+        -Deep cleaning search and removal of unnecessary updates and drivers by product title and update title.
         -IIS Configuration validation and optimization.
-        -Disable device driver syncronization and caching.
+        -Disable device driver synchronization and caching.
         -WSUS integrated update and computer cleanup
         -Microsoft best practice WSUS database optimization and re-indexing
         -Creation of daily and weekly optimization scheduled tasks.
@@ -24,7 +24,7 @@ Declines all updates that have been approved and are superseded by other updates
     Searches through most likely categories for unneeded updates and drivers to free up massive amounts of storage and improve database responsiveness. Prompts user to approve removal before deletion.
 
 .PARAMETER DisableDrivers
-    Disable device driver syncronization and caching.
+    Disable device driver synchronization and caching.
 
 .PARAMETER CheckConfig
     Validates current WSUS IIS configuration against recommended settings. Helps prevent frequent WSUS/IIS/SQL service crashes and the "RESET SERVER NODE" error.
@@ -708,12 +708,12 @@ function Optimize-WsusDatabase {
     # -Encrypt Optional fixes compatibility with SqlServer module >21.x (Issue #25, #26, #31)
     Invoke-Sqlcmd -Query $createCustomIndexesSQLQuery -ServerInstance $serverInstance -QueryTimeout 120 -Encrypt Optional
 
-    Write-Host "Running WSUS SQL database maintenence script. This can take an extremely long time on the first run."
+    Write-Host "Running WSUS SQL database maintenance script. This can take an extremely long time on the first run."
     # Run the WSUS SQL database maintenance script
     Invoke-Sqlcmd -Query $wsusDBMaintenanceSQLQuery -ServerInstance $serverInstance -QueryTimeout 40000 -Encrypt Optional
 }
 
-function New-WsusMaintainenceTask($interval) {
+function New-WsusMaintenanceTask($interval) {
     <#
     .SYNOPSIS
     Creates a new WSUS optimization scheduled tasks.
@@ -773,7 +773,7 @@ function New-WsusMaintainenceTask($interval) {
         -LogonType ServiceAccount `
         -RunLevel Highest
 
-    # Sending to $null to supress output
+    # Sending to $null to suppress output
     $null = Register-ScheduledTask $taskName -Action $task -Trigger $trigger -Settings $settings -Principal $principal
 
     Write-Host "Registered Scheduled Task: $taskName"
@@ -1167,10 +1167,10 @@ function Invoke-DeepClean ($titles, $productTitles) {
 function Disable-WsusDriverSync {
     <#
     .SYNOPSIS
-    Disable WSUS device driver syncronization and caching.
+    Disable WSUS device driver synchronization and caching.
 
     .DESCRIPTION
-    Disable WSUS device driver syncronization and caching. Automatic driver sychronization is one of the primary causes of WSUS slowness, crashing, and wasted storage space.
+    Disable WSUS device driver synchronization and caching. Automatic driver synchronization is one of the primary causes of WSUS slowness, crashing, and wasted storage space.
 
     .LINK
     https://docs.microsoft.com/en-us/powershell/module/updateservices/set-wsusclassification?view=win10-ps
@@ -2270,10 +2270,10 @@ switch($true) {
                 Optimize-WsusUpdates
             }
             (Confirm-Prompt "Create daily WSUS server optimization scheduled task?") {
-                New-WsusMaintainenceTask('Daily')
+                New-WsusMaintenanceTask('Daily')
             }
             (Confirm-Prompt "Create weekly WSUS database optimization scheduled task?") {
-                New-WsusMaintainenceTask('Weekly')
+                New-WsusMaintenanceTask('Weekly')
             }
             (Confirm-Prompt "Disable device driver synchronization?") {
                 Disable-WsusDriverSync
@@ -2291,10 +2291,10 @@ switch($true) {
         Invoke-DeepClean $unneededUpdatesbyTitle $unneededUpdatesbyProductTitles
     }
     ($InstallDailyTask) {
-        New-WsusMaintainenceTask('Daily')
+        New-WsusMaintenanceTask('Daily')
     }
     ($InstallWeeklyTask) {
-        New-WsusMaintainenceTask('Weekly')
+        New-WsusMaintenanceTask('Weekly')
     }
     ($CheckConfig) {
         $wsusIISConfig = Get-WsusIISConfig
