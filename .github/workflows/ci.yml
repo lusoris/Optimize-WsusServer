@@ -2,18 +2,20 @@ name: CI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ main, develop ]
     paths:
       - '**.ps1'
       - '**.psm1'
       - '**.psd1'
+      - 'PSScriptAnalyzerSettings.psd1'
       - '.github/workflows/ci.yml'
   pull_request:
-    branches: [ master, main ]
+    branches: [ main, develop ]
     paths:
       - '**.ps1'
       - '**.psm1'
       - '**.psd1'
+      - 'PSScriptAnalyzerSettings.psd1'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
 
@@ -45,8 +47,9 @@ jobs:
 
               Write-Host "Errors: $errors, Warnings: $warnings, Information: $info"
 
-              # Fail only on errors
-              if ($errors -gt 0) {
+              # Fail on errors OR warnings (strict mode)
+              if ($errors -gt 0 -or $warnings -gt 0) {
+                  Write-Host "::error::Failing due to $errors error(s) and $warnings warning(s)"
                   exit 1
               }
           } else {

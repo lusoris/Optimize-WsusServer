@@ -8,7 +8,7 @@
 
 Comprehensive Windows Server Update Services (WSUS) cleanup, optimization, maintenance, and configuration PowerShell script.
 
-Free and open source: [MIT License](https://github.com/lusoris/Optimize-WsusServer/blob/master/LICENSE)
+Free and open source: [MIT License](https://github.com/lusoris/Optimize-WsusServer/blob/main/LICENSE)
 
 ### Features
 

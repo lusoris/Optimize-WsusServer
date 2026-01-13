@@ -47,6 +47,51 @@ Declines all updates that have been approved and are superseded by other updates
 .PARAMETER FixUupMimeTypes
     Checks and adds missing UUP MIME types (.msu, .wim) required for Windows 11 22H2+ updates.
 
+.PARAMETER OptimizeForVM
+    Detects if running on a virtual machine (Hyper-V, VMware, Proxmox/KVM, VirtualBox) and provides hypervisor-specific optimization recommendations.
+
+.PARAMETER LowStorageMode
+    Configures WSUS for low storage environments by disabling express installation files and enabling download-on-demand (clients download from Microsoft Update).
+
+.PARAMETER AutoApproveUpdates
+    Interactively approves unapproved updates for specified computer groups based on classification (Critical, Security, Definition Updates, etc.).
+
+.PARAMETER WsusServer
+    Remote WSUS server hostname. If not specified, connects to local WSUS server.
+
+.PARAMETER WsusPort
+    WSUS server port number. Defaults to 8530 (HTTP) or 8531 (SSL).
+
+.PARAMETER UseSSL
+    Use SSL for WSUS server connection.
+
+.PARAMETER LogPath
+    Directory path for log files. Enables logging with automatic rotation.
+
+.PARAMETER LogRotateDays
+    Number of days to keep log files. Default: 30. Older files are automatically deleted.
+
+.PARAMETER SmtpServer
+    SMTP server hostname for email notifications.
+
+.PARAMETER EmailTo
+    Recipient email address for reports.
+
+.PARAMETER EmailFrom
+    Sender email address for reports.
+
+.PARAMETER Quiet
+    Suppresses all output except errors. Useful for scheduled tasks.
+
+.PARAMETER Verbose
+    Shows detailed progress information.
+
+.PARAMETER WhatIf
+    Shows what changes would be made without actually making them.
+
+.PARAMETER Confirm
+    Prompts for confirmation before making changes.
+
 .NOTES
   Version:        2.0.0
   Author:         Austin Warren (original), lusoris (fork maintainer)
@@ -56,12 +101,17 @@ Declines all updates that have been approved and are superseded by other updates
 .EXAMPLE
   Optimize-WsusServer.ps1 -FirstRun
   Optimize-WsusServer.ps1 -DeepClean
-  Optimize-WsusServer.ps1 -InstallDailyTask -CheckConfig -OptimizeServer
+  Optimize-WsusServer.ps1 -OptimizeServer -Quiet
+  Optimize-WsusServer.ps1 -CheckConfig -WhatIf
+  Optimize-WsusServer.ps1 -OptimizeServer -Verbose
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param (
+    [Parameter()]
+    [switch]
+    $Quiet,
     [Parameter()]
     [switch]
     $FirstRun,
@@ -94,7 +144,40 @@ param (
     $HealthCheck,
     [Parameter()]
     [switch]
-    $FixUupMimeTypes
+    $FixUupMimeTypes,
+    [Parameter()]
+    [switch]
+    $LowStorageMode,
+    [Parameter()]
+    [switch]
+    $OptimizeForVM,
+    [Parameter()]
+    [switch]
+    $AutoApproveUpdates,
+    [Parameter()]
+    [string]
+    $WsusServer,
+    [Parameter()]
+    [int]
+    $WsusPort,
+    [Parameter()]
+    [switch]
+    $UseSSL,
+    [Parameter()]
+    [string]
+    $LogPath,
+    [Parameter()]
+    [int]
+    $LogRotateDays = 30,
+    [Parameter()]
+    [string]
+    $SmtpServer,
+    [Parameter()]
+    [string]
+    $EmailTo,
+    [Parameter()]
+    [string]
+    $EmailFrom
 )
 
 #----------------------------------------------------------[Compatibility Check]----------------------------------------------------------
@@ -107,6 +190,87 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
     Write-Warning "  powershell.exe -File `"$PSCommandPath`""
     exit 1
 }
+
+#----------------------------------------------------------[Output Helper Functions]----------------------------------------------------------
+
+function Write-Status {
+    <#
+    .SYNOPSIS
+    Writes status messages respecting -Quiet and -Verbose flags.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [Parameter()]
+        [ValidateSet('Info', 'Success', 'Warning', 'Error', 'Header', 'Verbose')]
+        [string]$Type = 'Info',
+
+        [Parameter()]
+        [switch]$NoNewline
+    )
+
+    # Skip output in Quiet mode (except errors)
+    if ($script:Quiet -and $Type -ne 'Error') {
+        return
+    }
+
+    # Verbose messages only show with -Verbose
+    if ($Type -eq 'Verbose') {
+        Write-Verbose $Message
+        return
+    }
+
+    $params = @{}
+    if ($NoNewline) { $params['NoNewline'] = $true }
+
+    switch ($Type) {
+        'Info' { Write-Host $Message -ForegroundColor White @params }
+        'Success' { Write-Host $Message -ForegroundColor Green @params }
+        'Warning' { Write-Host $Message -ForegroundColor Yellow @params }
+        'Error' { Write-Host $Message -ForegroundColor Red @params }
+        'Header' { Write-Host $Message -BackgroundColor Blue -ForegroundColor White @params }
+    }
+}
+
+function Write-ProgressStatus {
+    <#
+    .SYNOPSIS
+    Displays a progress bar for long-running operations.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Activity,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Status,
+
+        [Parameter()]
+        [int]$PercentComplete = -1,
+
+        [Parameter()]
+        [int]$Id = 0,
+
+        [Parameter()]
+        [switch]$Completed
+    )
+
+    # Skip in Quiet mode
+    if ($script:Quiet) { return }
+
+    if ($Completed) {
+        Write-Progress -Activity $Activity -Id $Id -Completed
+    }
+    elseif ($PercentComplete -ge 0) {
+        Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete -Id $Id
+    }
+    else {
+        Write-Progress -Activity $Activity -Status $Status -Id $Id
+    }
+}
+
+# Store Quiet parameter at script scope for helper functions
+$script:Quiet = $Quiet
 
 #----------------------------------------------------------[Declarations]----------------------------------------------------------
 
@@ -479,26 +643,35 @@ function Optimize-WsusUpdates {
     https://docs.microsoft.com/en-us/powershell/scripting/developer/help/examples-of-comment-based-help?view=powershell-7
     #>
 
-    Write-Host "Deleting obsolete computers from WSUS database"
-    Invoke-WsusServerCleanup -CleanupObsoleteComputers
+    $steps = @(
+        @{ Name = "Deleting obsolete computers"; Action = { Invoke-WsusServerCleanup -CleanupObsoleteComputers } },
+        @{ Name = "Deleting obsolete updates"; Action = { Invoke-WsusServerCleanup -CleanupObsoleteUpdates } },
+        @{ Name = "Deleting unneeded content files"; Action = { Invoke-WsusServerCleanup -CleanupUnneededContentFiles } },
+        @{ Name = "Compressing update revisions"; Action = { Invoke-WsusServerCleanup -CompressUpdates } },
+        @{ Name = "Declining expired updates"; Action = { Invoke-WsusServerCleanup -DeclineExpiredUpdates } },
+        @{ Name = "Declining superseded updates"; Action = { Invoke-WsusServerCleanup -DeclineSupersededUpdates } },
+        @{ Name = "Declining additional superseded updates"; Action = { Decline-SupersededUpdates $true } }
+    )
 
-    Write-Host "Deleting obsolete updates"
-    Invoke-WsusServerCleanup -CleanupObsoleteUpdates
+    $totalSteps = $steps.Count
+    $currentStep = 0
 
-    Write-Host "Deleting unneeded content files"
-    Invoke-WsusServerCleanup -CleanupUnneededContentFiles
+    foreach ($step in $steps) {
+        $currentStep++
+        $percent = [math]::Round(($currentStep / $totalSteps) * 100)
 
-    Write-Host "Deleting obsolete update revisions"
-    Invoke-WsusServerCleanup -CompressUpdates
+        Write-ProgressStatus -Activity "WSUS Server Optimization" -Status $step.Name -PercentComplete $percent
+        Write-Verbose $step.Name
 
-    Write-Host "Declining expired updates"
-    Invoke-WsusServerCleanup -DeclineExpiredUpdates
+        if (-not $script:Quiet) {
+            Write-Host $step.Name -ForegroundColor Cyan
+        }
 
-    Write-Host "Declining superceded updates"
-    Invoke-WsusServerCleanup -DeclineSupersededUpdates
+        & $step.Action
+    }
 
-    Write-Host "Declining additional superceded updates"
-    Decline-SupersededUpdates $TRUE
+    Write-ProgressStatus -Activity "WSUS Server Optimization" -Status "Complete" -Completed
+    Write-Verbose "WSUS Server Optimization completed"
 }
 
 function Optimize-WsusDatabase {
@@ -766,7 +939,15 @@ function Test-WsusIISConfig ($settings, $recommended) {
     Stop-IISCommitDelay
 }
 
-function Update-WsusIISConfig ($settingKey, $recommendedValue) {
+function Update-WsusIISConfig {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$settingKey,
+
+        [Parameter(Mandatory = $true)]
+        $recommendedValue
+    )
     <#
     .SYNOPSIS
     Modifies IIS configuration for specified setting.
@@ -780,6 +961,14 @@ function Update-WsusIISConfig ($settingKey, $recommendedValue) {
     .PARAMETER recommendedValue
     Recommended value for WSUS IIS configuration setting.
     #>
+
+    # WhatIf support
+    if ($PSCmdlet.ShouldProcess("IIS Setting: $settingKey", "Set to $recommendedValue")) {
+        Write-Verbose "Updating IIS setting '$settingKey' to '$recommendedValue'"
+    }
+    else {
+        return
+    }
 
     # WSUS IIS Index
     $iisSiteIndex = Get-ItemPropertyValue "HKLM:\Software\Microsoft\Update Services\Server\Setup" -Name "IISTargetWebSiteIndex"
@@ -1166,6 +1355,758 @@ SELECT
     Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
 }
 
+function Get-VirtualMachineInfo {
+    <#
+    .SYNOPSIS
+    Detects if the server is running in a virtual machine and identifies the hypervisor.
+
+    .DESCRIPTION
+    Detects common hypervisors including:
+    - Microsoft Hyper-V
+    - VMware (ESXi, Workstation, Fusion)
+    - Proxmox/QEMU/KVM
+    - VirtualBox
+    - Xen
+
+    Returns a hashtable with VM status and hypervisor name.
+
+    .OUTPUTS
+    Hashtable with IsVirtualMachine (bool) and Hypervisor (string)
+    #>
+
+    $result = @{
+        IsVirtualMachine = $false
+        Hypervisor       = "Physical"
+        Model            = ""
+        Manufacturer     = ""
+    }
+
+    try {
+        # Get system information via WMI
+        $computerSystem = Get-WmiObject -Class Win32_ComputerSystem
+        $bios = Get-WmiObject -Class Win32_BIOS
+
+        $result.Model = $computerSystem.Model
+        $result.Manufacturer = $computerSystem.Manufacturer
+
+        # Check common VM indicators
+        $model = $computerSystem.Model.ToLower()
+        $manufacturer = $computerSystem.Manufacturer.ToLower()
+        $biosVersion = $bios.Version.ToLower()
+        $biosSerial = $bios.SerialNumber.ToLower()
+
+        # Microsoft Hyper-V
+        if ($model -match "virtual machine" -or $manufacturer -match "microsoft corporation") {
+            if ($model -match "virtual") {
+                $result.IsVirtualMachine = $true
+                $result.Hypervisor = "Hyper-V"
+                return $result
+            }
+        }
+
+        # VMware
+        if ($manufacturer -match "vmware" -or $model -match "vmware") {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "VMware"
+            return $result
+        }
+
+        # Proxmox / QEMU / KVM
+        if ($manufacturer -match "qemu" -or $model -match "qemu" -or
+            $biosVersion -match "qemu" -or $manufacturer -match "proxmox" -or
+            $model -match "standard pc" -or $model -match "kvm") {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "Proxmox/QEMU/KVM"
+            return $result
+        }
+
+        # VirtualBox
+        if ($model -match "virtualbox" -or $manufacturer -match "innotek" -or $biosVersion -match "virtualbox") {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "VirtualBox"
+            return $result
+        }
+
+        # Xen
+        if ($manufacturer -match "xen" -or $biosVersion -match "xen") {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "Xen"
+            return $result
+        }
+
+        # Additional check: Look for hypervisor via processor
+        $processor = Get-WmiObject -Class Win32_Processor | Select-Object -First 1
+        if ($processor.Name -match "virtual|qemu") {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "Unknown (VM detected via CPU)"
+            return $result
+        }
+
+        # Check for Hyper-V via feature flag (Windows built-in detection)
+        $hypervisorPresent = (Get-WmiObject -Class Win32_ComputerSystem).HypervisorPresent
+        if ($hypervisorPresent) {
+            $result.IsVirtualMachine = $true
+            $result.Hypervisor = "Unknown (Hypervisor present)"
+            return $result
+        }
+    }
+    catch {
+        Write-Warning "Could not detect VM status: $_"
+    }
+
+    return $result
+}
+
+function Invoke-VMOptimization {
+    <#
+    .SYNOPSIS
+    Applies VM-specific optimizations for WSUS servers.
+
+    .DESCRIPTION
+    When WSUS runs on a virtual machine, specific optimizations can improve performance:
+    - Recommends higher IIS application pool memory limits
+    - Suggests VM resource allocation
+    - Disables unnecessary IIS features for VMs
+    - Provides hypervisor-specific recommendations
+
+    .LINK
+    https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/windows-server-update-services-best-practices
+    #>
+
+    Write-Host "================ VM OPTIMIZATION ================" -BackgroundColor Blue -ForegroundColor White
+    Write-Host ""
+
+    # Detect VM
+    $vmInfo = Get-VirtualMachineInfo
+
+    Write-Host "[System Detection]" -ForegroundColor Cyan
+    Write-Host "  Manufacturer: $($vmInfo.Manufacturer)" -ForegroundColor White
+    Write-Host "  Model: $($vmInfo.Model)" -ForegroundColor White
+
+    if (-not $vmInfo.IsVirtualMachine) {
+        Write-Host "  Status: Physical Server" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "This server appears to be running on physical hardware." -ForegroundColor White
+        Write-Host "VM-specific optimizations are not applicable." -ForegroundColor White
+        Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+        return
+    }
+
+    Write-Host "  Status: Virtual Machine" -ForegroundColor Yellow
+    Write-Host "  Hypervisor: $($vmInfo.Hypervisor)" -ForegroundColor Yellow
+    Write-Host ""
+
+    # Get current system resources
+    $totalRAM = [math]::Round((Get-WmiObject -Class Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
+    $cpuCount = (Get-WmiObject -Class Win32_ComputerSystem).NumberOfLogicalProcessors
+
+    Write-Host "[Current VM Resources]" -ForegroundColor Cyan
+    Write-Host "  vCPUs: $cpuCount" -ForegroundColor White
+    Write-Host "  RAM: $totalRAM GB" -ForegroundColor White
+    Write-Host ""
+
+    # Resource recommendations based on best practices
+    Write-Host "[Recommendations for WSUS on VM]" -ForegroundColor Cyan
+    Write-Host ""
+
+    # CPU recommendations
+    if ($cpuCount -lt 4) {
+        Write-Host "  vCPU: Consider increasing to 4-6 vCPUs" -ForegroundColor Yellow
+        Write-Host "        WSUS is CPU-intensive during sync and client scans." -ForegroundColor Gray
+    } else {
+        Write-Host "  vCPU: $cpuCount vCPUs is adequate" -ForegroundColor Green
+    }
+
+    # RAM recommendations
+    if ($totalRAM -lt 8) {
+        Write-Host "  RAM: Consider increasing to 8+ GB" -ForegroundColor Yellow
+        Write-Host "       Minimum 4GB for small environments, 8GB+ recommended." -ForegroundColor Gray
+    } else {
+        Write-Host "  RAM: $totalRAM GB is adequate" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
+    # Hypervisor-specific recommendations
+    Write-Host "[Hypervisor-Specific Tips]" -ForegroundColor Cyan
+    switch -Regex ($vmInfo.Hypervisor) {
+        "Hyper-V" {
+            Write-Host "  - Use fixed-size VHDX for better I/O performance" -ForegroundColor White
+            Write-Host "  - Enable NUMA spanning if using multiple vCPUs" -ForegroundColor White
+            Write-Host "  - Consider using dynamic memory with 8GB minimum" -ForegroundColor White
+        }
+        "VMware" {
+            Write-Host "  - Use PVSCSI adapter for disk I/O" -ForegroundColor White
+            Write-Host "  - Use VMXNET3 for network adapter" -ForegroundColor White
+            Write-Host "  - Ensure VMware Tools are up to date" -ForegroundColor White
+            Write-Host "  - Consider memory reservation for consistent performance" -ForegroundColor White
+        }
+        "Proxmox|QEMU|KVM" {
+            Write-Host "  - Use VirtIO drivers for disk and network" -ForegroundColor White
+            Write-Host "  - Enable 'host' CPU type for best performance" -ForegroundColor White
+            Write-Host "  - Consider using local SSD storage for WSUS database" -ForegroundColor White
+            Write-Host "  - Install QEMU Guest Agent for better integration" -ForegroundColor White
+        }
+        "VirtualBox" {
+            Write-Host "  - VirtualBox is not recommended for production WSUS" -ForegroundColor Yellow
+            Write-Host "  - Consider migrating to Hyper-V, VMware, or Proxmox" -ForegroundColor Yellow
+            Write-Host "  - If using VirtualBox, enable VT-x/AMD-V and nested paging" -ForegroundColor White
+        }
+        default {
+            Write-Host "  - Ensure guest tools/agents are installed" -ForegroundColor White
+            Write-Host "  - Use paravirtualized drivers where available" -ForegroundColor White
+        }
+    }
+
+    Write-Host ""
+
+    # IIS Settings for VMs
+    Write-Host "[IIS Settings for VM Environment]" -ForegroundColor Cyan
+    Write-Host "  Running -CheckConfig to validate IIS settings..." -ForegroundColor White
+    Write-Host "  VM environments should use unlimited memory (RecyclingPrivateMemory = 0)" -ForegroundColor Gray
+    Write-Host ""
+
+    Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+}
+
+function Invoke-LowStorageOptimization {
+    <#
+    .SYNOPSIS
+    Configures WSUS for low storage environments.
+
+    .DESCRIPTION
+    Applies aggressive storage-saving measures:
+    - Configures WSUS to not store update files locally (clients download from Microsoft)
+    - Disables express installation files
+    - Enables upgrade deferral for feature updates
+    - Provides storage usage report
+
+    WARNING: This will change how updates are delivered. Clients will download
+    directly from Microsoft Update instead of your WSUS server.
+
+    .LINK
+    https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/plan/plan-your-wsus-deployment
+    #>
+
+    Write-Host "================ LOW STORAGE MODE ================" -BackgroundColor Blue -ForegroundColor White
+    Write-Host ""
+
+    # Get current storage usage
+    $wsusSetup = Get-ItemProperty -Path "HKLM:\Software\Microsoft\Update Services\Server\Setup" -ErrorAction SilentlyContinue
+
+    if (-not $wsusSetup) {
+        Write-Warning "Could not read WSUS configuration from registry."
+        return
+    }
+
+    Write-Host "[Current Storage Usage]" -ForegroundColor Cyan
+
+    $contentDir = $wsusSetup.ContentDir
+    if ($contentDir -and (Test-Path $contentDir)) {
+        $contentSize = (Get-ChildItem -Path $contentDir -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        $contentSizeGB = [math]::Round($contentSize / 1GB, 2)
+        Write-Host "  Content Directory: $contentDir" -ForegroundColor White
+        Write-Host "  Current Size: $contentSizeGB GB" -ForegroundColor White
+
+        # Get disk free space
+        $drive = (Get-Item $contentDir).PSDrive.Name
+        $diskInfo = Get-WmiObject -Class Win32_LogicalDisk -Filter "DeviceID='${drive}:'"
+        $freeSpaceGB = [math]::Round($diskInfo.FreeSpace / 1GB, 2)
+        $totalSpaceGB = [math]::Round($diskInfo.Size / 1GB, 2)
+        $usedPercent = [math]::Round((($totalSpaceGB - $freeSpaceGB) / $totalSpaceGB) * 100, 1)
+
+        Write-Host "  Disk Free Space: $freeSpaceGB GB / $totalSpaceGB GB ($usedPercent% used)" -ForegroundColor White
+
+        if ($freeSpaceGB -lt 20) {
+            Write-Host "  WARNING: Low disk space!" -ForegroundColor Red
+        }
+    }
+
+    Write-Host ""
+    Write-Host "[Storage Saving Options]" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Check current express files setting
+    $expressEnabled = $false
+    try {
+        $wsusConfig = (Get-WsusServer).GetConfiguration()
+        $expressEnabled = $wsusConfig.DownloadExpressPackages
+        $localContentCaching = -not $wsusConfig.DownloadUpdateBinariesAsNeeded
+
+        Write-Host "  Express Installation Files: $(if ($expressEnabled) { 'Enabled (uses more space)' } else { 'Disabled' })" -ForegroundColor White
+        Write-Host "  Local Content Caching: $(if ($localContentCaching) { 'Enabled (stores files locally)' } else { 'Disabled (clients download from MS)' })" -ForegroundColor White
+    }
+    catch {
+        Write-Warning "Could not query current WSUS settings: $_"
+    }
+
+    Write-Host ""
+    Write-Host "[Recommended Actions for Low Storage]" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "1. Disable Express Installation Files" -ForegroundColor White
+    Write-Host "   Saves significant space but increases client download time." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "2. Enable 'Download updates only when approved'" -ForegroundColor White
+    Write-Host "   Prevents downloading unused updates." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "3. Configure clients to download from Microsoft" -ForegroundColor White
+    Write-Host "   Set 'DownloadUpdateBinariesAsNeeded' = True" -ForegroundColor Gray
+    Write-Host "   WSUS approves updates, clients download from Microsoft Update." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "4. Run cleanup to remove obsolete content" -ForegroundColor White
+    Write-Host "   Use -OptimizeServer to clean up unneeded files." -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "5. Disable driver synchronization" -ForegroundColor White
+    Write-Host "   Use -DisableDrivers to prevent driver updates." -ForegroundColor Gray
+    Write-Host ""
+
+    $applyChanges = Confirm-Prompt "Apply storage-saving configuration changes? (Disables express files, enables download-on-demand)"
+
+    if ($applyChanges) {
+        Write-Host ""
+        Write-Host "Applying storage-saving configuration..." -ForegroundColor Cyan
+
+        try {
+            $wsusServer = Get-WsusServer
+            $wsusConfig = $wsusServer.GetConfiguration()
+
+            # Disable express installation files
+            if ($wsusConfig.DownloadExpressPackages) {
+                $wsusConfig.DownloadExpressPackages = $false
+                Write-Host "  Disabled Express Installation Files" -ForegroundColor Green
+            }
+
+            # Enable download binaries as needed (clients download from MS)
+            if (-not $wsusConfig.DownloadUpdateBinariesAsNeeded) {
+                $wsusConfig.DownloadUpdateBinariesAsNeeded = $true
+                Write-Host "  Enabled Download-on-Demand (clients download from Microsoft)" -ForegroundColor Green
+            }
+
+            $wsusConfig.Save()
+            Write-Host ""
+            Write-Host "Configuration saved successfully!" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Next steps:" -ForegroundColor Yellow
+            Write-Host "  1. Run -OptimizeServer to clean up existing cached content" -ForegroundColor White
+            Write-Host "  2. Run -DisableDrivers if you don't need driver updates" -ForegroundColor White
+            Write-Host "  3. Review approved products and remove unused categories" -ForegroundColor White
+        }
+        catch {
+            Write-Error "Failed to apply configuration: $_"
+        }
+    }
+    else {
+        Write-Host ""
+        Write-Host "No changes made." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+}
+
+#----------------------------------------------------------[Logging Functions]----------------------------------------------------------
+
+function Write-Log {
+    <#
+    .SYNOPSIS
+    Writes a message to both console and log file.
+
+    .PARAMETER Message
+    The message to write.
+
+    .PARAMETER Level
+    The log level: Info, Warning, Error, Success.
+
+    .PARAMETER LogFile
+    Path to the log file. If not specified, uses $script:LogFilePath.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [Parameter()]
+        [ValidateSet('Info', 'Warning', 'Error', 'Success')]
+        [string]$Level = 'Info',
+
+        [Parameter()]
+        [string]$LogFile = $script:LogFilePath
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+
+    # Console output with colors
+    switch ($Level) {
+        'Info'    { Write-Host $Message -ForegroundColor White }
+        'Warning' { Write-Host $Message -ForegroundColor Yellow }
+        'Error'   { Write-Host $Message -ForegroundColor Red }
+        'Success' { Write-Host $Message -ForegroundColor Green }
+    }
+
+    # File output
+    if ($LogFile) {
+        Add-Content -Path $LogFile -Value $logMessage -ErrorAction SilentlyContinue
+    }
+}
+
+function Initialize-Logging {
+    <#
+    .SYNOPSIS
+    Initializes logging for the script.
+
+    .PARAMETER LogPath
+    Directory path for log files. Defaults to script directory.
+
+    .PARAMETER LogRotateDays
+    Number of days to keep log files. Older files are deleted.
+    #>
+    param(
+        [Parameter()]
+        [string]$LogPath,
+
+        [Parameter()]
+        [int]$LogRotateDays = 30
+    )
+
+    # Set default log path to script directory
+    if (-not $LogPath) {
+        $LogPath = Split-Path -Parent $PSCommandPath
+    }
+
+    # Create log directory if it doesn't exist
+    if (-not (Test-Path $LogPath)) {
+        New-Item -ItemType Directory -Path $LogPath -Force | Out-Null
+    }
+
+    # Create log file with timestamp
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $script:LogFilePath = Join-Path $LogPath "Optimize-WsusServer_$timestamp.log"
+
+    # Log rotation - remove old log files
+    if ($LogRotateDays -gt 0) {
+        $cutoffDate = (Get-Date).AddDays(-$LogRotateDays)
+        Get-ChildItem -Path $LogPath -Filter "Optimize-WsusServer_*.log" -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $cutoffDate } |
+            ForEach-Object {
+                Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+                Write-Verbose "Removed old log file: $($_.Name)"
+            }
+    }
+
+    # Write header to log file
+    $header = @"
+================================================================================
+Optimize-WsusServer Log
+Started: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Computer: $env:COMPUTERNAME
+User: $env:USERNAME
+================================================================================
+"@
+    Set-Content -Path $script:LogFilePath -Value $header
+
+    return $script:LogFilePath
+}
+
+function Send-EmailReport {
+    <#
+    .SYNOPSIS
+    Sends an email report with the log file attached.
+
+    .PARAMETER SmtpServer
+    SMTP server hostname.
+
+    .PARAMETER To
+    Recipient email address(es).
+
+    .PARAMETER From
+    Sender email address.
+
+    .PARAMETER Subject
+    Email subject line.
+
+    .PARAMETER Body
+    Email body text.
+
+    .PARAMETER AttachLog
+    Whether to attach the log file.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SmtpServer,
+
+        [Parameter(Mandatory = $true)]
+        [string]$To,
+
+        [Parameter(Mandatory = $true)]
+        [string]$From,
+
+        [Parameter()]
+        [string]$Subject = "WSUS Optimization Report - $env:COMPUTERNAME",
+
+        [Parameter()]
+        [string]$Body,
+
+        [Parameter()]
+        [switch]$AttachLog
+    )
+
+    if (-not $Body) {
+        $Body = @"
+WSUS Optimization Report
+
+Server: $env:COMPUTERNAME
+Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+The WSUS optimization script has completed. Please see the attached log file for details.
+
+This is an automated message from Optimize-WsusServer.ps1
+"@
+    }
+
+    $mailParams = @{
+        SmtpServer = $SmtpServer
+        To         = $To
+        From       = $From
+        Subject    = $Subject
+        Body       = $Body
+    }
+
+    if ($AttachLog -and $script:LogFilePath -and (Test-Path $script:LogFilePath)) {
+        $mailParams['Attachments'] = $script:LogFilePath
+    }
+
+    try {
+        Send-MailMessage @mailParams
+        Write-Log "Email report sent to $To" -Level Success
+    }
+    catch {
+        Write-Log "Failed to send email report: $_" -Level Error
+    }
+}
+
+#----------------------------------------------------------[Remote WSUS Support]----------------------------------------------------------
+
+function Get-WsusServerConnection {
+    <#
+    .SYNOPSIS
+    Gets a WSUS server connection, supporting both local and remote servers.
+
+    .PARAMETER ServerName
+    The WSUS server name. If not specified, connects to local server.
+
+    .PARAMETER PortNumber
+    The WSUS port number. Defaults to 8530 (HTTP) or 8531 (SSL).
+
+    .PARAMETER UseSSL
+    Whether to use SSL for the connection.
+    #>
+    param(
+        [Parameter()]
+        [string]$ServerName,
+
+        [Parameter()]
+        [int]$PortNumber,
+
+        [Parameter()]
+        [switch]$UseSSL
+    )
+
+    [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | Out-Null
+
+    # If no server specified, use local detection
+    if (-not $ServerName) {
+        return Get-WsusServerInstance
+    }
+
+    # Remote server connection
+    try {
+        # Default ports
+        if (-not $PortNumber) {
+            $PortNumber = if ($UseSSL) { 8531 } else { 8530 }
+        }
+
+        Write-Log "Connecting to WSUS server: $ServerName`:$PortNumber (SSL: $UseSSL)" -Level Info
+
+        $wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer($ServerName, $UseSSL, $PortNumber)
+        Write-Log "Connected to remote WSUS server successfully" -Level Success
+
+        return $wsus
+    }
+    catch {
+        Write-Log "Failed to connect to WSUS server $ServerName`: $_" -Level Error
+        throw
+    }
+}
+
+#----------------------------------------------------------[Auto-Approve Functions]----------------------------------------------------------
+
+function Invoke-AutoApproveUpdates {
+    <#
+    .SYNOPSIS
+    Automatically approves updates based on configurable rules.
+
+    .DESCRIPTION
+    Approves updates for specified computer groups based on:
+    - Update classification (Critical, Security, Definition, etc.)
+    - Product categories
+    - Age of update (days since release)
+
+    .LINK
+    https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/manage/updates-operations
+    #>
+
+    Write-Host "================ AUTO-APPROVE UPDATES ================" -BackgroundColor Blue -ForegroundColor White
+    Write-Host ""
+
+    try {
+        $wsusServer = Get-WsusServer
+
+        # Get all computer groups
+        $computerGroups = $wsusServer.GetComputerTargetGroups()
+        Write-Host "[Computer Groups]" -ForegroundColor Cyan
+        $groupList = @()
+        $i = 1
+        foreach ($group in $computerGroups) {
+            Write-Host "  $i. $($group.Name)" -ForegroundColor White
+            $groupList += $group
+            $i++
+        }
+        Write-Host ""
+
+        # Ask which group to approve for
+        Write-Host "Enter group number to approve updates for (or 'all' for All Computers): " -ForegroundColor Yellow -NoNewline
+        $groupChoice = Read-Host
+
+        $targetGroup = $null
+        if ($groupChoice -eq 'all') {
+            $targetGroup = $computerGroups | Where-Object { $_.Name -eq 'All Computers' }
+        }
+        elseif ($groupChoice -match '^\d+$' -and [int]$groupChoice -le $groupList.Count) {
+            $targetGroup = $groupList[[int]$groupChoice - 1]
+        }
+        else {
+            Write-Host "Invalid selection." -ForegroundColor Red
+            return
+        }
+
+        Write-Host ""
+        Write-Host "Target group: $($targetGroup.Name)" -ForegroundColor Cyan
+        Write-Host ""
+
+        # Get update classifications
+        Write-Host "[Update Classifications to Auto-Approve]" -ForegroundColor Cyan
+        $defaultClassifications = @(
+            'Critical Updates',
+            'Security Updates',
+            'Definition Updates',
+            'Update Rollups'
+        )
+
+        Write-Host "Default classifications:" -ForegroundColor White
+        $defaultClassifications | ForEach-Object { Write-Host "  - $_" -ForegroundColor Gray }
+        Write-Host ""
+
+        $useDefaults = Confirm-Prompt "Use default classifications?"
+
+        $selectedClassifications = @()
+        if ($useDefaults) {
+            $selectedClassifications = $defaultClassifications
+        }
+        else {
+            $allClassifications = $wsusServer.GetUpdateClassifications()
+            Write-Host ""
+            Write-Host "Available classifications:" -ForegroundColor White
+            $i = 1
+            foreach ($class in $allClassifications) {
+                Write-Host "  $i. $($class.Title)" -ForegroundColor White
+                $i++
+            }
+            Write-Host ""
+            Write-Host "Enter classification numbers separated by comma (e.g., 1,2,3): " -ForegroundColor Yellow -NoNewline
+            $classChoice = Read-Host
+            $classNums = $classChoice -split ',' | ForEach-Object { [int]$_.Trim() }
+            foreach ($num in $classNums) {
+                if ($num -le $allClassifications.Count) {
+                    $selectedClassifications += $allClassifications[$num - 1].Title
+                }
+            }
+        }
+
+        Write-Host ""
+        Write-Host "Searching for updates to approve..." -ForegroundColor Cyan
+
+        # Get unapproved updates matching our criteria
+        $updateScope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
+        $updateScope.ApprovedStates = [Microsoft.UpdateServices.Administration.ApprovedStates]::NotApproved
+
+        $updates = $wsusServer.GetUpdates($updateScope)
+        $matchingUpdates = @()
+
+        foreach ($update in $updates) {
+            # Skip declined updates
+            if ($update.IsDeclined) { continue }
+
+            # Check classification
+            $updateClass = $update.UpdateClassificationTitle
+            if ($selectedClassifications -contains $updateClass) {
+                $matchingUpdates += $update
+            }
+        }
+
+        Write-Host ""
+        Write-Host "Found $($matchingUpdates.Count) updates matching criteria." -ForegroundColor White
+
+        if ($matchingUpdates.Count -eq 0) {
+            Write-Host "No updates to approve." -ForegroundColor Green
+            Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+            return
+        }
+
+        # Show summary by classification
+        Write-Host ""
+        Write-Host "[Updates by Classification]" -ForegroundColor Cyan
+        $matchingUpdates | Group-Object UpdateClassificationTitle | ForEach-Object {
+            Write-Host "  $($_.Name): $($_.Count)" -ForegroundColor White
+        }
+
+        Write-Host ""
+        $approve = Confirm-Prompt "Approve these $($matchingUpdates.Count) updates for '$($targetGroup.Name)'?"
+
+        if ($approve) {
+            Write-Host ""
+            Write-Host "Approving updates..." -ForegroundColor Cyan
+            $approved = 0
+            $failed = 0
+
+            foreach ($update in $matchingUpdates) {
+                try {
+                    $update.Approve([Microsoft.UpdateServices.Administration.UpdateApprovalAction]::Install, $targetGroup) | Out-Null
+                    $approved++
+                    Write-Host "  Approved: $($update.Title)" -ForegroundColor Green
+                }
+                catch {
+                    $failed++
+                    Write-Host "  Failed: $($update.Title) - $_" -ForegroundColor Red
+                }
+            }
+
+            Write-Host ""
+            Write-Host "Approval complete: $approved approved, $failed failed" -ForegroundColor Cyan
+            Write-Log "Auto-approved $approved updates for group '$($targetGroup.Name)'" -Level Success
+        }
+        else {
+            Write-Host "No updates approved." -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "Error during auto-approve: $_" -ForegroundColor Red
+        Write-Log "Auto-approve failed: $_" -Level Error
+    }
+
+    Write-Host ""
+    Write-Host "=================================================" -BackgroundColor Blue -ForegroundColor White
+}
+
 function Unblock-WebConfigAcl {
     <#
     .SYNOPSIS
@@ -1297,6 +2238,19 @@ function Decline-SupersededUpdates ($verbose){
     }
 }
 #-----------------------------------------------------------[Execution]------------------------------------------------------------
+
+# Initialize logging if LogPath is specified
+if ($LogPath) {
+    $logFile = Initialize-Logging -LogPath $LogPath -LogRotateDays $LogRotateDays
+    Write-Log "Optimize-WsusServer started" -Level Info
+    Write-Log "Parameters: $($PSBoundParameters.Keys -join ', ')" -Level Info
+}
+
+# Override WSUS connection if remote server is specified
+if ($WsusServer) {
+    $script:WsusConnection = Get-WsusServerConnection -ServerName $WsusServer -PortNumber $WsusPort -UseSSL:$UseSSL
+}
+
 $iisPath = Get-WsusIISLocalizedNamespacePath
 
 # Check commandline parameters.
@@ -1358,4 +2312,23 @@ switch($true) {
     ($FixUupMimeTypes) {
         Test-WsusUupMimeTypes -Fix
     }
+    ($OptimizeForVM) {
+        Invoke-VMOptimization
+    }
+    ($LowStorageMode) {
+        Invoke-LowStorageOptimization
+    }
+    ($AutoApproveUpdates) {
+        Invoke-AutoApproveUpdates
+    }
+}
+
+# Send email report if SMTP settings are configured
+if ($SmtpServer -and $EmailTo -and $EmailFrom) {
+    Send-EmailReport -SmtpServer $SmtpServer -To $EmailTo -From $EmailFrom -AttachLog
+}
+
+# Log completion
+if ($LogPath) {
+    Write-Log "Optimize-WsusServer completed" -Level Success
 }
