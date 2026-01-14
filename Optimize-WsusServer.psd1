@@ -1,27 +1,27 @@
 @{
     # Script module or binary module file associated with this manifest.
-    RootModule        = 'Optimize-WsusServer.psm1'
+    RootModule           = 'Optimize-WsusServer.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '2.1.0'
+    ModuleVersion        = '2.1.0'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop')
 
     # ID used to uniquely identify this module
-    GUID              = 'd94b6e64-2214-4ed9-abb7-0824729f96f1'
+    GUID                 = 'd94b6e64-2214-4ed9-abb7-0824729f96f1'
 
     # Author of this module
-    Author            = 'Austin Warren (original), lusoris (fork maintainer)'
+    Author               = 'Austin Warren (original), lusoris (fork maintainer)'
 
     # Company or vendor of this module
-    CompanyName       = 'Community'
+    CompanyName          = 'Community'
 
     # Copyright statement for this module
-    Copyright         = '(c) 2020-2026. MIT License.'
+    Copyright            = '(c) 2020-2026. MIT License.'
 
     # Description of the functionality provided by this module
-    Description       = @'
+    Description          = @'
 Comprehensive Windows Server Update Services (WSUS) configuration and optimization module.
 
 Features:
@@ -36,16 +36,16 @@ Features:
 '@
 
     # Minimum version of the PowerShell engine required by this module
-    PowerShellVersion = '5.1'
+    PowerShellVersion    = '5.1'
 
     # Modules that must be imported into the global environment prior to importing this module
-    RequiredModules   = @(
+    RequiredModules      = @(
         @{ ModuleName = 'SqlServer'; ModuleVersion = '21.0.0' }
     )
 
     # Functions to export from this module, for best performance, do not use wildcards
     # Note: Only includes functions that are currently implemented in the Public/ folder
-    FunctionsToExport = @(
+    FunctionsToExport    = @(
         # Main optimization functions
         'Invoke-WsusOptimization'
         'Invoke-WsusDeepClean'
@@ -75,13 +75,13 @@ Features:
     )
 
     # Cmdlets to export from this module
-    CmdletsToExport   = @()
+    CmdletsToExport      = @()
 
     # Variables to export from this module
-    VariablesToExport = @()
+    VariablesToExport    = @()
 
     # Aliases to export from this module
-    AliasesToExport   = @(
+    AliasesToExport      = @(
         'owsus'            # Invoke-WsusOptimization
         'wsushealth'       # Get-WsusHealthStatus
         'wsuscheck'        # Test-WsusPrerequisitesPublic
@@ -90,10 +90,10 @@ Features:
     )
 
     # Private data to pass to the module specified in RootModule
-    PrivateData       = @{
-        PSData = @{
+    PrivateData          = @{
+        PSData                  = @{
             # Tags applied to this module for online gallery discoverability
-            Tags         = @(
+            Tags                       = @(
                 'WSUS'
                 'WindowsServer'
                 'Optimization'
@@ -106,22 +106,22 @@ Features:
             )
 
             # A URL to the license for this module.
-            LicenseUri   = 'https://github.com/lusoris/Optimize-WsusServer/blob/develop/LICENSE'
+            LicenseUri                 = 'https://github.com/lusoris/Optimize-WsusServer/blob/develop/LICENSE'
 
             # A URL to the main website for this project.
-            ProjectUri   = 'https://github.com/lusoris/Optimize-WsusServer'
+            ProjectUri                 = 'https://github.com/lusoris/Optimize-WsusServer'
 
             # A URL to the documentation
-            WikiUri      = 'https://github.com/lusoris/Optimize-WsusServer/wiki'
+            WikiUri                    = 'https://github.com/lusoris/Optimize-WsusServer/wiki'
 
             # A URL to report issues
-            BugTrackerUri = 'https://github.com/lusoris/Optimize-WsusServer/issues'
+            BugTrackerUri              = 'https://github.com/lusoris/Optimize-WsusServer/issues'
 
             # A URL to an icon representing this module.
             # IconUri = ''
 
             # ReleaseNotes of this module
-            ReleaseNotes = @'
+            ReleaseNotes               = @'
 ## Version 2.1.0 - Modular Architecture (Current)
 
 ### Critical Tier-1 Fixes
@@ -129,7 +129,7 @@ Features:
 - ✅ FIX #2: Build validation added (syntax, functions, size checks)
 - ✅ FIX #3: GitHub Actions CI/CD pipeline implemented
 
-### Important Tier-2 Improvements  
+### Important Tier-2 Improvements
 - ✅ README.md rewritten (Module vs Script separation)
 - ✅ Private functions documented (18 helper functions)
 - ✅ Manifest PSData enhanced with better metadata
@@ -170,7 +170,7 @@ Features:
             # Prerelease = ''
 
             # Flag to indicate whether the module requires explicit user acceptance
-            RequireLicenseAcceptance = $false
+            RequireLicenseAcceptance   = $false
 
             # External module dependencies
             ExternalModuleDependencies = @()
@@ -178,7 +178,7 @@ Features:
 
         # Supported Windows Server versions and their characteristics
         SupportedServerVersions = @{
-            'Server2012R2' = @{ Build = 9600;  Status = 'Limited'; EOL = $true;  Notes = 'Limited support, EOL approaching' }
+            'Server2012R2' = @{ Build = 9600; Status = 'Limited'; EOL = $true; Notes = 'Limited support, EOL approaching' }
             'Server2016'   = @{ Build = 14393; Status = 'Supported'; EOL = $false; Notes = 'Full support' }
             'Server2019'   = @{ Build = 17763; Status = 'Supported'; EOL = $false; Notes = 'Full support, recommended minimum' }
             'Server2022'   = @{ Build = 20348; Status = 'Supported'; EOL = $false; Notes = 'Full support' }
@@ -186,25 +186,25 @@ Features:
         }
 
         # Build and deployment information
-        Build = @{
-            Version         = '2.1.0'
-            BuildDate       = '2026-01-14'
-            GenerateScript  = 'Build\Build-MonolithicScript.ps1'
-            OutputPath      = 'dist\Optimize-WsusServer.ps1'
-            LastValidation  = '2026-01-14'
+        Build                   = @{
+            Version        = '2.1.0'
+            BuildDate      = '2026-01-14'
+            GenerateScript = 'Build\Build-MonolithicScript.ps1'
+            OutputPath     = 'dist\Optimize-WsusServer.ps1'
+            LastValidation = '2026-01-14'
         }
 
         # Module maintainer information
-        Maintainers = @(
+        Maintainers             = @(
             @{
-                Name       = 'lusoris'
-                GitHub     = 'https://github.com/lusoris'
-                Role       = 'Fork Maintainer'
+                Name   = 'lusoris'
+                GitHub = 'https://github.com/lusoris'
+                Role   = 'Fork Maintainer'
             }
             @{
-                Name       = 'Austin Warren'
-                GitHub     = 'https://github.com/awarre'
-                Role       = 'Original Author'
+                Name   = 'Austin Warren'
+                GitHub = 'https://github.com/awarre'
+                Role   = 'Original Author'
             }
         )
     }

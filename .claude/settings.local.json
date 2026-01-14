@@ -16,7 +16,9 @@
       "Bash(powershell.exe -NoProfile -Command \"& { Get-ChildItem -Path ''.'' -Filter ''*.ps1'' -Recurse | ForEach-Object { Write-Host $_Name } }\")",
       "Bash(powershell.exe -NoProfile -Command \"$errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile\\(''c:\\\\Users\\\\ms\\\\dev\\\\Optimize-WsusServer\\\\Optimize-WsusServer.ps1'', [ref]$null, [ref]$errors\\); if \\($errors\\) { $errors | ForEach-Object { Write-Host \\(''Line '' + $_Extent.StartLineNumber + '': '' + $_Message\\) } } else { Write-Host ''Optimize-WsusServer.ps1: OK'' }\")",
       "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"c:\\\\Users\\\\ms\\\\dev\\\\Optimize-WsusServer\\\\check-syntax.ps1\")",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api:*)"
     ]
   }
 }
