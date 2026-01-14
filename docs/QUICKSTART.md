@@ -1,6 +1,6 @@
-# Schnellstart-Anleitung
+# Quick Start Guide
 
-Diese Anleitung zeigt die wichtigsten Anwendungsfälle für Optimize-WsusServer.
+This guide shows the most common use cases for Optimize-WsusServer module.
 
 ## Voraussetzungen
 
@@ -88,28 +88,25 @@ Invoke-WsusDatabaseOptimization -Reindex -CreateCustomIndexes
 .\Optimize-WsusServer.ps1 -OptimizeDatabase -ReindexDatabase -CreateCustomIndexes
 ```
 
-### 5. IIS für WSUS konfigurieren
+### 5. IIS-Konfiguration überprüfen
 
-**Was es tut:** Setzt optimale IIS Application Pool Einstellungen.
+**Was es tut:** Überprüft WSUS IIS-Einstellungen und zeigt Abweichungen von empfohlenen Werten.
 
 ```powershell
 # Als Modul
-Set-WsusIISConfig
+Get-WsusIISConfig
 
-# Als Script
-.\Optimize-WsusServer.ps1 -ConfigureIIS
+# Zum Validieren gegen empfohlene Werte
+Test-WsusPrerequisites
 ```
 
 ### 6. Windows 11 Support (UUP MIME Types)
 
-**Was es tut:** Fügt fehlende MIME Types für Windows 11 22H2+ Updates hinzu.
+**Was es tut:** Überprüft und fügt fehlende MIME Types für Windows 11 22H2+ Updates hinzu.
 
 ```powershell
-# Prüfen
-Test-WsusUupMimeTypes
-
-# Hinzufügen wenn nötig
-Add-WsusUupMimeTypes
+# Überprüfen und automatisch beheben wenn nötig
+Test-WsusUupMimeTypes -Fix
 ```
 
 ### 7. Scheduled Task erstellen
