@@ -1,0 +1,123 @@
+﻿name: Build & Test
+
+on:
+  push:
+    branches: [ develop, master ]
+  pull_request:
+    branches: [ develop, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Build Monolithic Script
+        shell: pwsh
+        run: |
+          Write-Host "🔨 Building monolithic script..." -ForegroundColor Cyan
+          ./Build/Build-MonolithicScript.ps1 -Version "2.1.0"
+
+          if ((Test-Path -Path "./dist/Optimize-WsusServer.ps1")) {
+            Write-Host "✅ Build successful" -ForegroundColor Green
+          } else {
+            Write-Error "❌ Build failed - output file not found"
+            exit 1
+          }
+
+      - name: Validate Build Output
+        shell: pwsh
+        run: |
+          Write-Host "🔍 Validating build output..." -ForegroundColor Cyan
+          ./Build/Validate-Build.ps1 -FailOnWarning
+
+      - name: Test Module Import
+        shell: pwsh
+        run: |
+          Write-Host "📦 Testing module import..." -ForegroundColor Cyan
+          Import-Module ./Optimize-WsusServer.psd1 -Force -ErrorAction Stop
+          Write-Host "✅ Module imported successfully" -ForegroundColor Green
+
+      - name: List Public Functions
+        shell: pwsh
+        run: |
+          Write-Host "📋 Listing exported functions..." -ForegroundColor Cyan
+          $functions = Get-Command -Module Optimize-WsusServer -CommandType Function
+          Write-Host "✅ Public Functions ($($functions.Count)):" -ForegroundColor Green
+          $functions | ForEach-Object { Write-Host "  ✓ $_" }
+
+      - name: Upload Generated Script
+        uses: actions/upload-artifact@v3
+        with:
+          name: Optimize-WsusServer-build-${{ github.run_number }}
+          path: dist/Optimize-WsusServer.ps1
+          retention-days: 30
+          if-no-files-found: error
+
+  lint:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Write-Host "📥 Installing PSScriptAnalyzer..." -ForegroundColor Cyan
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -Confirm:$false -ErrorAction Stop
+          Write-Host "✅ PSScriptAnalyzer installed" -ForegroundColor Green
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Write-Host "🔎 Running PSScriptAnalyzer..." -ForegroundColor Cyan
+          $results = Invoke-ScriptAnalyzer -Path ./Public, ./Private -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+
+          if ($results) {
+            Write-Host "⚠️  PSScriptAnalyzer Issues Found:" -ForegroundColor Yellow
+            $results | Format-Table -AutoSize
+
+            $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
+            if ($errors.Count -gt 0) {
+              Write-Error "❌ Found $($errors.Count) error(s)"
+              exit 1
+            }
+          } else {
+            Write-Host "✅ No PSScriptAnalyzer issues found" -ForegroundColor Green
+          }
+
+  manifest:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Validate Module Manifest
+        shell: pwsh
+        run: |
+          Write-Host "📋 Validating module manifest..." -ForegroundColor Cyan
+          $manifest = Test-ModuleManifest -Path ./Optimize-WsusServer.psd1 -ErrorAction Stop
+
+          if ($manifest) {
+            Write-Host "✅ Module Manifest is valid" -ForegroundColor Green
+            Write-Host "   Name:      $($manifest.Name)"
+            Write-Host "   Version:   $($manifest.Version)"
+            Write-Host "   Functions: $($manifest.ExportedFunctions.Keys.Count)"
+            Write-Host "   Author:    $($manifest.Author)"
+          }
+
+      - name: Check Required Modules
+        shell: pwsh
+        run: |
+          Write-Host "🔍 Checking required modules..." -ForegroundColor Cyan
+          $manifest = Import-PowerShellDataFile -Path ./Optimize-WsusServer.psd1
+
+          if ($manifest.RequiredModules) {
+            Write-Host "Required modules:" -ForegroundColor Cyan
+            $manifest.RequiredModules | ForEach-Object {
+              Write-Host "  - $($_.ModuleName) ($($_.ModuleVersion))"
+            }
+          }

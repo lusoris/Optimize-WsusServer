@@ -2,34 +2,91 @@
 
 ## Project Overview
 
-**Optimize-WsusServer** is a comprehensive PowerShell script for WSUS (Windows Server Update Services) maintenance, optimization, and configuration. It's a monolithic script (~2,300 lines) that performs server health checks, database optimization, IIS configuration, update management, and storage optimization tasks.
+**Optimize-WsusServer** is a comprehensive PowerShell module for WSUS (Windows Server Update Services) maintenance, optimization, and configuration.
+
+**Version:** 2.1.0 (Modular Architecture)
+
+The project now features a **modular code structure** while maintaining backwards compatibility with the original monolithic script:
+
+-   **Module Usage:** `Import-Module Optimize-WsusServer.psd1` (Development/Testing)
+-   **Script Usage:** `dist\Optimize-WsusServer.ps1` (Production/Distribution)
+
+### Architecture
+
+The module is organized into two deployable forms:
+
+1. **PowerShell Module** (~18 Private + 13 Public Functions) - Full IDE/IntelliSense support
+2. **Monolithic Script** (~2,300 lines in dist/) - Single file, zero dependencies
 
 ## Critical Architecture Decisions
 
-### Single-Script Monolith Design
+### Dual-Mode Design (v2.1.0+)
 
-The entire project is one file: [Optimize-WsusServer.ps1](../Optimize-WsusServer.ps1). This is intentional:
+**DO:** Support both module and script modes:
 
--   Simplifies deployment (single file to copy)
--   Targets Windows PowerShell 5.1 only (not PowerShell 7)
--   Used as a scheduled task via direct copy to C:\Scripts\
--   **Do NOT split into modules** - maintain the single-file pattern
+-   Module Mode: `Import-Module .\Optimize-WsusServer.psd1`
+-   Script Mode: `.\dist\Optimize-WsusServer.ps1`
+
+**DO:** Use the modular structure for development and provide a monolithic build:
+
+-   Modular code in `Public/` and `Private/` for maintainability
+-   Build system generates single-file script in `dist/` for distribution
+-   Build system is located in `Build\Build-MonolithicScript.ps1`
+
+### Module Structure
+
+The project follows Microsoft PowerShell best practices:
+
+```
+Public/              # 13 exported functions
+├── Invoke-WsusOptimization.ps1
+├── Invoke-WsusDatabaseOptimization.ps1
+├── Get-WsusHealthStatus.ps1
+├── Get-WsusEnvironment.ps1
+├── Test-WsusPrerequisites.ps1
+├── Test-WsusUupMimeTypes.ps1
+├── Get-WsusIISConfig.ps1
+├── Invoke-WsusDeepClean.ps1
+├── Invoke-WsusAutoApprove.ps1
+├── Disable-WsusDriverSync.ps1
+├── Set-WsusLowStorageMode.ps1
+├── New-WsusMaintenanceTask.ps1
+└── Invoke-WsusVMOptimization.ps1
+
+Private/             # ~18 internal helper functions
+├── Core/            # Registry, SQL, connection helpers
+├── Detection/       # Server/VM detection
+├── Database/        # SQL operations
+├── IIS/             # IIS configuration
+├── Output/          # Logging & status
+├── Storage/         # Storage calculations
+└── Updates/         # Update operations
+
+Data/                # Configuration data
+├── IISRecommendedSettings.psd1
+└── UnneededUpdates.psd1
+
+Templates/           # Build templates
+├── ParameterBlock.ps1
+└── ExecutionBlock.ps1
+```
 
 ### Parameter-Driven Execution Model
 
-The script uses a switch statement (line ~2250) to route parameter combinations:
+The execution block (both in module and script) routes based on parameters:
 
 ```powershell
-switch($true) {
-    ($FirstRun) { ... }
-    ($DeepClean) { ... }
-    ($OptimizeServer) { ... }
-}
+# Module usage
+Invoke-WsusOptimization -Verbose
+Invoke-WsusDatabaseOptimization -Reindex
+
+# Script usage
+.\dist\Optimize-WsusServer.ps1 -OptimizeServer -Verbose
+.\dist\Optimize-WsusServer.ps1 -DeepClean -WhatIf
 ```
 
--   Parameters like `-FirstRun`, `-DeepClean`, `-OptimizeServer` are mutually exclusive workflows
--   `-Quiet`, `-Verbose`, `-Confirm`, `-WhatIf` are universal modifiers applied to all flows
--   Remote server override: `-WsusServer`, `-WsusPort`, `-UseSSL` redirect `$script:WsusConnection`
+Parameters like `-FirstRun`, `-DeepClean`, `-OptimizeServer` define workflow modes.
+Modifiers like `-Quiet`, `-Verbose`, `-Confirm`, `-WhatIf` apply universally.
 
 ## Dependencies & Environment
 

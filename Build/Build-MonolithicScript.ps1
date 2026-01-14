@@ -413,7 +413,7 @@ if ($lineCount -lt 100) {
 Write-Host ""
 if ($validationErrors.Count -eq 0) {
     Write-Host "Validation: PASSED ✓" -ForegroundColor Green
-    
+
     # Generate PlatyPS help documentation
     Write-Host ""
     Write-Host "Generating PlatyPS help documentation..." -ForegroundColor Cyan
@@ -427,7 +427,7 @@ if ($validationErrors.Count -eq 0) {
             Write-Host "  Install with: Install-Module PlatyPS -Force"
         }
     }
-    
+
     exit 0
 } else {
     Write-Host "Validation: FAILED ❌" -ForegroundColor Red
