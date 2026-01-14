@@ -1,5 +1,11 @@
 name: Release
 
+# Automatically triggered when a version tag is pushed (e.g., git push origin v2.1.0)
+# Three jobs run in sequence:
+# 1. build - Validates manifest, builds monolithic script, generates release notes
+# 2. publish-gallery - Publishes module to PowerShell Gallery (optional, requires NUGET_KEY secret)
+# 3. post-release - Updates CHANGELOG.md and creates version bump commit
+
 on:
   push:
     tags:
@@ -208,3 +214,153 @@ jobs:
             LICENSE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-gallery:
+    name: Publish to PowerShell Gallery
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Update module version
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $manifestPath = './Optimize-WsusServer.psd1'
+
+          # Read manifest
+          $manifest = (Get-Content $manifestPath) -join "`n"
+
+          # Update version
+          $manifest = $manifest -replace "ModuleVersion\s*=\s*'[\d.]+(?:-[\w]+)?'", "ModuleVersion = '$version'"
+
+          # Update PreRelease suffix if version contains hyphen (e.g., 2.1.0-beta)
+          if ($version -match '-') {
+              $manifest = $manifest -replace "Prerelease\s*=\s*'.*?'", "Prerelease = '$($version -replace '^[\d.]+-(.*)', '$1')'"
+          } else {
+              $manifest = $manifest -replace ",\s*Prerelease\s*=\s*'.*?'", ''
+          }
+
+          Set-Content -Path $manifestPath -Value $manifest
+          Write-Host "✓ Updated manifest version to $version"
+
+      - name: Validate module for gallery
+        shell: pwsh
+        run: |
+          try {
+              $manifest = Test-ModuleManifest -Path './Optimize-WsusServer.psd1' -WarningAction Ignore -ErrorAction Stop
+              Write-Host "✓ Module validation passed"
+              Write-Host "  Name: $($manifest.Name)"
+              Write-Host "  Version: $($manifest.Version)"
+              Write-Host "  Functions: $($manifest.ExportedFunctions.Count)"
+              Write-Host "  Author: $($manifest.Author)"
+          }
+          catch {
+              Write-Host "::error::Module validation failed: $_"
+              exit 1
+          }
+
+      - name: Publish to PowerShell Gallery
+        shell: pwsh
+        env:
+          NUGET_KEY: ${{ secrets.NUGET_KEY }}
+        run: |
+          # Only publish if NuGet API key is configured
+          if (-not $env:NUGET_KEY) {
+              Write-Host "::warning::NUGET_KEY secret not configured. Skipping PowerShell Gallery publish."
+              Write-Host "To enable publishing, add your PowerShell Gallery API key as 'NUGET_KEY' secret in GitHub settings."
+              exit 0
+          }
+
+          try {
+              Publish-Module -Path '.' -NuGetApiKey $env:NUGET_KEY -Force -WarningAction SilentlyContinue -ErrorAction Stop
+              Write-Host "✓ Successfully published to PowerShell Gallery"
+          }
+          catch {
+              Write-Host "::error::Failed to publish to PowerShell Gallery: $_"
+              Write-Host ""
+              Write-Host "Note: Ensure your module can be published:"
+              Write-Host "  1. All functions are in Public/ or Private/ folders"
+              Write-Host "  2. Module manifest (psd1) is in repo root"
+              Write-Host "  3. Version in psd1 matches the release tag"
+              Write-Host "  4. All required module files are included"
+              exit 1
+          }
+
+      - name: Create publish notification
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          Write-Host "✓ Release v$version completed"
+          Write-Host ""
+          Write-Host "Module available at:"
+          Write-Host "  PowerShell Gallery: https://www.powershellgallery.com/packages/Optimize-WsusServer/$version"
+          Write-Host "  GitHub Releases: https://github.com/${{ github.repository }}/releases/tag/v$version"
+
+  post-release:
+    name: Post-Release Tasks
+    needs: [build, publish-gallery]
+    runs-on: windows-latest
+    if: success()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get release version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Update changelog entry
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $date = Get-Date -Format "yyyy-MM-dd"
+
+          # If CHANGELOG.md exists, add entry (optional)
+          if (Test-Path './CHANGELOG.md') {
+              $changelog = Get-Content './CHANGELOG.md' -Raw
+              $newEntry = @"
+          ## [$version] - $date
+
+          ### Release
+          - Published v$version to PowerShell Gallery and GitHub Releases
+          - All fixes and features from this release are documented in release notes
+
+          "@
+
+              $updated = $newEntry + $changelog
+              Set-Content './CHANGELOG.md' -Value $updated
+              Write-Host "✓ Updated CHANGELOG.md"
+          } else {
+              Write-Host "ℹ No CHANGELOG.md found - skipping"
+          }
+
+      - name: Create commit for version bump
+        shell: pwsh
+        run: |
+          # Check if manifest was updated
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if (git status --porcelain) {
+              git add Optimize-WsusServer.psd1 CHANGELOG.md 2>$null
+              git commit -m "chore(release): bump version to v${{ steps.version.outputs.version }}" 2>$null || $true
+              git push 2>$null || $true
+              Write-Host "✓ Created version bump commit"
+          } else {
+              Write-Host "ℹ No changes to commit"
+          }
