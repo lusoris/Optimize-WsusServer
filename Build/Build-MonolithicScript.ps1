@@ -413,6 +413,21 @@ if ($lineCount -lt 100) {
 Write-Host ""
 if ($validationErrors.Count -eq 0) {
     Write-Host "Validation: PASSED ✓" -ForegroundColor Green
+    
+    # Generate PlatyPS help documentation
+    Write-Host ""
+    Write-Host "Generating PlatyPS help documentation..." -ForegroundColor Cyan
+    $generateHelpScript = Join-Path $BuildRoot "GenerateHelp.ps1"
+    if (Test-Path $generateHelpScript) {
+        try {
+            & $generateHelpScript -Force
+            Write-Host "PlatyPS help generation: PASSED ✓" -ForegroundColor Green
+        } catch {
+            Write-Host "PlatyPS help generation: SKIPPED (PlatyPS module not installed)" -ForegroundColor Yellow
+            Write-Host "  Install with: Install-Module PlatyPS -Force"
+        }
+    }
+    
     exit 0
 } else {
     Write-Host "Validation: FAILED ❌" -ForegroundColor Red
