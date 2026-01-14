@@ -27,249 +27,331 @@ Free and open source: [MIT License](LICENSE)
 
 ## Version 2.1.0 - Modular Architecture
 
-This version introduces a **modular code structure** while maintaining backwards compatibility:
+This version introduces a **modular code structure** while maintaining backwards compatibility with the original monolithic script:
 
-### Two Ways to Use
+### ⚡ Choose Your Usage Method
 
-| Method | Best For | How |
-|--------|----------|-----|
-| **PowerShell Module** | Development, Testing, Interactive Use | `Import-Module .\Optimize-WsusServer.psd1` |
-| **Monolithic Script** | Production, Scheduled Tasks, Distribution | `.\dist\Optimize-WsusServer.ps1` |
+| **🧩 PowerShell Module** | **📦 Monolithic Script** |
+|---|---|
+| **Best for:** Development, testing, interactive use | **Best for:** Production, scheduled tasks, distribution |
+| `Import-Module .\Optimize-WsusServer.psd1` | `.\dist\Optimize-WsusServer.ps1` |
+| Full IDE/IntelliSense support | Single file, zero dependencies |
+| Modular functions, easy to debug | Self-contained, easy to distribute |
+| Edit and test individual functions | Run directly from scheduled task |
+| [→ Module Usage](#module-usage) | [→ Script-usage](#script-usage) |
 
 ### New in v2.1.0
 
 * **Modular Code Structure** - Public/Private function pattern following Microsoft best practices
 * **Extended Server Support** - Windows Server 2012 R2 through 2025+ with automatic detection
 * **Consolidated Helper Functions** - Eliminated code duplication (8+ registry accesses → 1 function)
-* **Build System** - Generates single-file script from modular code
+* **Automated Build System** - Generates and validates single-file script from modular code
+* **CI/CD Pipeline** - GitHub Actions for automated build validation
 * **Comprehensive Documentation** - [docs/](docs/) folder with full reference
 
 ---
 
-## Table of Contents
+## Prerequisites
 
-* [Getting Started](#getting-started)
-* [Quick Examples](#quick-examples)
-* [Documentation](#documentation)
-* [Available Functions](#available-functions)
-* [What's Fixed](#whats-fixed)
-* [License](#license)
-* [References](#references)
+* **Windows Server 2012 R2 / 2016 / 2019 / 2022 / 2025+** with WSUS installed
+* **Windows PowerShell 5.1** (PowerShell 7+ is NOT supported - WSUS module unavailable)
+* **SqlServer Module** v21.0.0+ ([Install](https://www.powershellgallery.com/packages/SqlServer/))
+
+```powershell
+Install-Module SqlServer -Scope CurrentUser -Force
+```
 
 ---
 
-## Getting Started
+## Installation & Usage
 
-### Prerequisites
+### Module Usage
 
-* **Windows Server 2012 R2 / 2016 / 2019 / 2022 / 2025** with WSUS installed
-* **Windows PowerShell 5.1** (PowerShell 7 is NOT supported - WSUS module not available)
-* [SqlServer PowerShell module](https://docs.microsoft.com/en-us/sql/powershell/download-sql-server-ps-module)
+**For development, testing, and interactive use:**
 
 ```powershell
-Install-Module SqlServer -Scope CurrentUser
-```
-
-### Installation
-
-#### Option 1: Monolithic Script (Recommended for Production)
-
-```powershell
-# Download the script
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lusoris/Optimize-WsusServer/develop/dist/Optimize-WsusServer.ps1" -OutFile "Optimize-WsusServer.ps1"
-
-# Run Health Check
-.\Optimize-WsusServer.ps1 -HealthCheck
-```
-
-#### Option 2: PowerShell Module (Recommended for Development)
-
-```powershell
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/lusoris/Optimize-WsusServer.git
 cd Optimize-WsusServer
 
-# Import module
-Import-Module .\Optimize-WsusServer.psd1
+# 2. Import the module
+Import-Module .\Optimize-WsusServer.psd1 -Force
 
-# List available commands
+# 3. List available commands
 Get-Command -Module Optimize-WsusServer
+
+# 4. Get help
+Get-Help Invoke-WsusOptimization -Full
 ```
 
----
-
-## Quick Examples
-
-### Health Check
-
+**Module Examples:**
 ```powershell
-# As Module
+# Check WSUS health
 Get-WsusHealthStatus
 
-# As Script
-.\Optimize-WsusServer.ps1 -HealthCheck
-```
+# Check environment
+Get-WsusEnvironment
 
-### Standard Server Cleanup
+# Validate IIS configuration
+$config = Get-WsusIISConfig
+$config | Format-Table
 
-```powershell
-# As Module
-Invoke-WsusOptimization
+# Run standard optimization
+Invoke-WsusOptimization -Verbose
 
-# As Script
-.\Optimize-WsusServer.ps1 -OptimizeServer
-```
+# Run deep clean (with prompts)
+Invoke-WsusDeepClean -Verbose
 
-### Decline Superseded Updates
-
-```powershell
-# As Module
-Invoke-WsusDeepClean -DeclineSuperseded
-
-# As Script
-.\Optimize-WsusServer.ps1 -DeepClean -DeclineSupersededUpdates
-```
-
-### Database Optimization
-
-```powershell
-# As Module
-Invoke-WsusDatabaseOptimization -Reindex
-
-# As Script
-.\Optimize-WsusServer.ps1 -OptimizeDatabase -ReindexDatabase
-```
-
-### Full Maintenance
-
-```powershell
-.\Optimize-WsusServer.ps1 -DeepClean -DeclineSupersededUpdates -OptimizeServer -OptimizeDatabase -ReindexDatabase
+# Create scheduled tasks
+New-WsusMaintenanceTask
 ```
 
 ---
 
-## Documentation
+### Script Usage
 
-Full documentation is available in the [docs/](docs/) folder:
+**For production, scheduled tasks, and distribution:**
 
-| Document | Description |
-|----------|-------------|
-| [Quickstart](docs/QUICKSTART.md) | First steps and common use cases |
-| [Function Reference](docs/FUNCTION-REFERENCE.md) | All public functions with examples |
-| [Parameter Reference](docs/PARAMETER-REFERENCE.md) | All script parameters in detail |
-| [Module Structure](docs/MODULE-STRUCTURE.md) | Technical architecture |
-| [Build Process](docs/BUILD-PROCESS.md) | How the monolithic script is generated |
+#### 1. Build or Download
 
-### Reference Documentation
+```powershell
+# Option A: Build from source
+git clone https://github.com/lusoris/Optimize-WsusServer.git
+cd Optimize-WsusServer
+.\Build\Build-MonolithicScript.ps1
+# Output: dist\Optimize-WsusServer.ps1
 
-Local copies of Microsoft documentation for offline use and AI assistants:
+# Option B: Download pre-built from releases
+# https://github.com/lusoris/Optimize-WsusServer/releases/latest
+```
 
-| Document | Description |
-|----------|-------------|
-| [PowerShell Module Structure](docs/references/PowerShell-Module-Structure.md) | PS module best practices |
-| [WSUS PowerShell Reference](docs/references/WSUS-PowerShell-Reference.md) | WSUS/IIS/SQL cmdlets |
-| [Windows Server Versions](docs/references/Windows-Server-Versions.md) | Build numbers and feature matrix |
+#### 2. Deploy to Production
+
+```powershell
+# Copy single file to target servers
+Copy-Item dist\Optimize-WsusServer.ps1 -Destination C:\Scripts\
+```
+
+#### 3. Run as Standalone Script
+
+```powershell
+# All commands work without module import
+
+# Health check
+C:\Scripts\Optimize-WsusServer.ps1 -HealthCheck
+
+# Standard optimization (quiet)
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeServer -Quiet
+
+# Deep clean with confirmation
+C:\Scripts\Optimize-WsusServer.ps1 -DeepClean -Confirm
+
+# Database optimization
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeDatabase
+
+# With logging
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeServer -Quiet -LogPath C:\Logs
+```
+
+#### 4. Schedule Automated Maintenance
+
+```powershell
+# Create scheduled tasks automatically
+C:\Scripts\Optimize-WsusServer.ps1 -InstallDailyTask
+C:\Scripts\Optimize-WsusServer.ps1 -InstallWeeklyTask
+
+# Or with email notifications
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeServer `
+  -Quiet `
+  -LogPath C:\Logs `
+  -SmtpServer mail.company.com `
+  -EmailFrom wsus@company.com `
+  -EmailTo admins@company.com
+```
 
 ---
 
 ## Available Functions
 
-### Optimization & Cleanup
+### Core Optimization
 
 | Function | Description |
 |----------|-------------|
-| `Invoke-WsusOptimization` | Standard WSUS Server Cleanup |
-| `Invoke-WsusDeepClean` | Deep cleaning with update decline |
-| `Invoke-WsusDatabaseOptimization` | Database maintenance and reindexing |
+| `Invoke-WsusOptimization` | Runs all Microsoft recommended WSUS cleanup operations |
+| `Invoke-WsusDatabaseOptimization` | Optimizes WSUS SQL database with reindexing |
+| `Invoke-WsusDeepClean` | Removes unnecessary updates and drivers by category |
 
-### Diagnostics & Health
-
-| Function | Description |
-|----------|-------------|
-| `Get-WsusHealthStatus` | Comprehensive health check |
-| `Get-WsusEnvironment` | Environment information |
-| `Test-WsusPrerequisites` | Prerequisites check |
-
-### Configuration
+### Configuration & Health
 
 | Function | Description |
 |----------|-------------|
-| `Get-WsusIISConfig` | Read IIS configuration |
-| `Test-WsusIISConfig` | Validate IIS settings |
-| `Set-WsusIISConfig` | Apply recommended settings |
-| `Test-WsusUupMimeTypes` | Check Windows 11 MIME types |
-| `Add-WsusUupMimeTypes` | Add missing MIME types |
+| `Get-WsusHealthStatus` | Comprehensive WSUS server health report |
+| `Get-WsusEnvironment` | Detect server version, hypervisor, installed modules |
+| `Get-WsusIISConfig` | Read current IIS pool settings for WSUS |
+| `Test-WsusPrerequisites` | Verify prerequisites (PowerShell, modules, WSUS) |
+| `Test-WsusUupMimeTypes` | Check Windows 11 UUP MIME types (.msu, .wim) |
 
-### Update Management
-
-| Function | Description |
-|----------|-------------|
-| `Invoke-WsusAutoApprove` | Auto-approval rules |
-| `Disable-WsusDriverSync` | Disable driver sync (saves storage) |
-| `Enable-WsusDriverSync` | Enable driver sync |
-
-### Storage & VM
+### Maintenance & Automation
 
 | Function | Description |
 |----------|-------------|
-| `Set-WsusLowStorageMode` | Configure for limited storage |
-| `Get-WsusStorageReport` | Storage usage report |
-| `Invoke-WsusVMOptimization` | VM-specific optimizations |
+| `Disable-WsusDriverSync` | Disable driver and driver set synchronization |
+| `Invoke-WsusAutoApprove` | Interactively approve updates by classification |
+| `New-WsusMaintenanceTask` | Create scheduled tasks for nightly/weekly optimization |
+| `Set-WsusLowStorageMode` | Configure WSUS for low-disk environments |
+| `Invoke-WsusVMOptimization` | Display hypervisor-specific optimization tips |
 
-### Scheduled Tasks
-
-| Function | Description |
-|----------|-------------|
-| `New-WsusMaintenanceTask` | Create maintenance task |
-| `Remove-WsusMaintenanceTask` | Remove maintenance task |
+**Full documentation:** See [docs/FUNCTION-REFERENCE.md](docs/FUNCTION-REFERENCE.md)
 
 ---
 
-## What's Fixed
+## Documentation
 
-This fork addresses the following issues from the original repository:
-
-| Issue | Description | Fix |
-|-------|-------------|-----|
-| [#20](https://github.com/awarre/Optimize-WsusServer/issues/20) | Get-WsusIISLocalizedNamespacePath returns empty path | Environment variable expansion added |
-| [#24](https://github.com/awarre/Optimize-WsusServer/issues/24) | PowerShell 7 support | Added compatibility check with helpful error message |
-| [#25](https://github.com/awarre/Optimize-WsusServer/issues/25) | SQL Server encryption error | Added `-Encrypt Optional` parameter |
-| [#26](https://github.com/awarre/Optimize-WsusServer/issues/26) | SqlServer module >21.x incompatibility | Added `-Encrypt Optional` parameter |
-| [#27](https://github.com/awarre/Optimize-WsusServer/issues/27) | SSL error on first run | Added automatic SSL detection |
-| [#31](https://github.com/awarre/Optimize-WsusServer/issues/31) | SqlServer 22.3.0 missing invoke-sqlcmd | Works with latest SqlServer module |
-| [#33](https://github.com/awarre/Optimize-WsusServer/issues/33) | HTTP requests fail when SSL required | Added automatic SSL detection and fallback |
-
-### Additional Improvements in v2.1.0
-
-* Eliminated 8+ duplicated registry access functions
-* Consolidated 3 similar WSUS connection functions
-* Added Windows Server 2025 support
-* Future-proof version detection for newer Windows Server releases
-* Modular code structure for easier maintenance
+- **[QUICKSTART.md](docs/QUICKSTART.md)** - Get running in 5 minutes
+- **[FUNCTION-REFERENCE.md](docs/FUNCTION-REFERENCE.md)** - Complete function documentation
+- **[MODULE-STRUCTURE.md](docs/MODULE-STRUCTURE.md)** - Folder and file organization
+- **[BUILD-PROCESS.md](docs/BUILD-PROCESS.md)** - How the build system works
+- **[PARAMETER-REFERENCE.md](docs/PARAMETER-REFERENCE.md)** - All script parameters explained
 
 ---
 
-## Project Structure
+## Common Use Cases
 
+### Use Case 1: Quick Health Check
+```powershell
+# Module:
+Get-WsusHealthStatus
+
+# Script:
+C:\Scripts\Optimize-WsusServer.ps1 -HealthCheck
+```
+
+### Use Case 2: Nightly Optimization
+```powershell
+# Module (interactive):
+Invoke-WsusOptimization -Verbose
+
+# Script (scheduled task):
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeServer -Quiet -LogPath C:\Logs
+```
+
+### Use Case 3: Weekly Database Maintenance
+```powershell
+# Module:
+Invoke-WsusDatabaseOptimization -Verbose
+
+# Script:
+C:\Scripts\Optimize-WsusServer.ps1 -OptimizeDatabase -Quiet -LogPath C:\Logs
+```
+
+### Use Case 4: Storage Optimization
+```powershell
+# Module:
+Set-WsusLowStorageMode -Verbose
+
+# Script:
+C:\Scripts\Optimize-WsusServer.ps1 -LowStorageMode
+```
+
+### Use Case 5: Disable Drivers (Save Storage)
+```powershell
+# Module:
+Disable-WsusDriverSync
+
+# Script:
+C:\Scripts\Optimize-WsusServer.ps1 -DisableDrivers
+```
+
+---
+
+## What's Fixed in v2.1.0
+
+### Critical Fixes
+- ✅ **FIX #1:** FunctionsToExport synchronized (25 → 13 functions)
+- ✅ **FIX #2:** Build system validation added (syntax, functions, size checks)
+- ✅ **FIX #3:** GitHub Actions CI/CD pipeline implemented
+
+### Bug Fixes
+- ✅ SQL Server module encryption compatibility (issue #25, #26)
+- ✅ IIS path localization for non-English Windows (issue #20)
+- ✅ PowerShell 7 detection and proper error messaging
+- ✅ WSUS remote server connection stability
+- ✅ SSL/TLS automatic detection on first run
+
+### Architecture Improvements
+- ✅ Modular code structure (Public/Private functions)
+- ✅ Eliminated duplicate code (8+ registry calls → 1 helper)
+- ✅ Consistent output functions with -Quiet support
+- ✅ Automated build system with comprehensive validation
+- ✅ GitHub Actions for every commit
+
+### New Features
+- ✅ Extended Windows Server version detection (2012 R2 - 2025+)
+- ✅ Hypervisor detection and optimization tips
+- ✅ Email reporting with log attachments
+- ✅ Low-storage mode configuration
+- ✅ Auto-approve updates by classification
+- ✅ Windows 11 UUP MIME type support
+
+---
+
+## Development
+
+### Building from Source
+```powershell
+cd Optimize-WsusServer
+
+# Build the monolithic script
+.\Build\Build-MonolithicScript.ps1
+
+# Run code analysis
+Invoke-ScriptAnalyzer -Path .\Public, .\Private -Settings .\PSScriptAnalyzerSettings.psd1 -Recurse
+
+# Run tests (coming in v2.2)
+# Invoke-Pester Tests/
+```
+
+### Code Structure
 ```
 Optimize-WsusServer/
-├── Optimize-WsusServer.psd1    # Module manifest
-├── Optimize-WsusServer.psm1    # Module loader
-├── Public/                      # Exported functions (13 files)
-├── Private/                     # Internal helpers (18 files)
-│   ├── Core/                    # Registry, SQL, Connection
-│   ├── Detection/               # Server version, VM detection
-│   ├── Database/                # SQL queries
-│   ├── IIS/                     # IIS configuration
-│   ├── Output/                  # Logging, status output
-│   ├── Storage/                 # Content size
-│   └── Updates/                 # Update operations
-├── Data/                        # Configuration data
-├── Templates/                   # Build templates
-├── Build/                       # Build system
-├── dist/                        # Generated monolithic script
-└── docs/                        # Documentation
+├── Public/                 # 13 exported functions
+├── Private/                # 18 internal helpers
+│   ├── Core/              # Registry, SQL, connection
+│   ├── Database/          # SQL queries
+│   ├── Detection/         # Server, VM detection
+│   ├── IIS/               # IIS configuration
+│   ├── Output/            # Logging, status
+│   ├── Storage/           # Content sizing
+│   └── Updates/           # Update operations
+├── Data/                  # Configuration files
+├── Build/                 # Build system
+├── dist/                  # Generated script
+└── docs/                  # Documentation
 ```
+
+---
+
+## Troubleshooting
+
+### Error: "WSUS module not found"
+```powershell
+# Ensure you're using Windows PowerShell 5.1, not pwsh (PowerShell 7+)
+$PSVersionTable.PSVersion  # Must be 5.1.x
+
+# Run as Administrator
+Start-Process powershell.exe -Verb RunAs
+```
+
+### Error: "SqlServer module not installed"
+```powershell
+Install-Module SqlServer -Scope CurrentUser -Force
+Import-Module SqlServer
+```
+
+### Script Runs but Takes Very Long
+- Database optimization can take hours on first run - this is normal
+- Run on low-traffic hours (nights/weekends)
+- Use `-Quiet` flag to reduce overhead
 
 ---
 
@@ -277,26 +359,29 @@ Optimize-WsusServer/
 
 Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 
-## Contact
+---
 
-* Fork Maintainer: [lusoris](https://github.com/lusoris)
-* Original Project: [awarre/Optimize-WsusServer](https://github.com/awarre/Optimize-WsusServer)
+## Support & Links
+
+* 📖 [Full Documentation](docs/)
+* 🐛 [Report Issues](https://github.com/lusoris/Optimize-WsusServer/issues)
+* 💬 [Discussions](https://github.com/lusoris/Optimize-WsusServer/discussions)
+* 🔗 [Original Project](https://github.com/awarre/Optimize-WsusServer)
 
 ---
 
 ## References
 
 ### Microsoft Documentation
-
-* [The complete guide to Microsoft WSUS and Configuration Manager SUP maintenance](https://support.microsoft.com/en-us/help/4490644/complete-guide-to-microsoft-wsus-and-configuration-manager-sup-maint)
-* [Windows Server Update Services best practices](https://docs.microsoft.com/en-us/troubleshoot/mem/configmgr/windows-server-update-services-best-practices)
-* [Plan your WSUS deployment](https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/plan/plan-your-wsus-deployment)
-* [Reindex the WSUS Database](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd939795(v=ws.10))
-* [WSUS Automatic Maintenance](https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/wsus-automatic-maintenance)
+* [WSUS Best Practices](https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/plan/plan-your-wsus-deployment)
+* [Complete WSUS Maintenance Guide](https://support.microsoft.com/en-us/help/4490644)
+* [WSUS Database Optimization](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd939795(v=ws.10))
+* [WSUS Best Practices](https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/update-management/windows-server-update-services-best-practices)
 
 ### PowerShell References
-
 * [SqlServer PowerShell Module](https://docs.microsoft.com/en-us/sql/powershell/download-sql-server-ps-module)
+* [IIS Administration Module](https://docs.microsoft.com/en-us/powershell/module/iisadministration/)
+
 * [IIS Administration Module](https://blogs.iis.net/iisteam/introducing-iisadministration-in-the-powershell-gallery)
 * [Invoke-Sqlcmd](https://docs.microsoft.com/en-us/powershell/module/sqlserver/invoke-sqlcmd)
 * [Invoke-WsusServerCleanup](https://docs.microsoft.com/en-us/powershell/module/wsus/Invoke-WsusServerCleanup)
