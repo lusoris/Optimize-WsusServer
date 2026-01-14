@@ -59,8 +59,7 @@ if (-not $Version) {
     if (Test-Path $manifestPath) {
         $manifest = Import-PowerShellDataFile $manifestPath
         $Version = $manifest.ModuleVersion
-    }
-    else {
+    } else {
         $Version = '2.1.0'
     }
 }
@@ -130,19 +129,16 @@ $originalScriptPath = Join-Path $ModuleRoot 'Optimize-WsusServer.ps1'
 
 if (Test-Path $paramBlockPath) {
     $paramBlock = Get-Content $paramBlockPath -Raw
-}
-elseif (Test-Path $originalScriptPath) {
+} elseif (Test-Path $originalScriptPath) {
     # Extrahiere Parameter-Block aus Original-Script
     $originalContent = Get-Content $originalScriptPath -Raw
     if ($originalContent -match '(?s)\[CmdletBinding.*?param\s*\(.*?\)\s*\)') {
         $paramBlock = $matches[0]
-    }
-    else {
+    } else {
         Write-Warning "Could not extract parameter block from original script"
         $paramBlock = ''
     }
-}
-else {
+} else {
     Write-Warning "No parameter block source found"
     $paramBlock = ''
 }
@@ -264,8 +260,7 @@ $executionBlock = ''
 
 if (Test-Path $execBlockPath) {
     $executionBlock = Get-Content $execBlockPath -Raw
-}
-elseif (Test-Path $originalScriptPath) {
+} elseif (Test-Path $originalScriptPath) {
     # Extrahiere Execution-Block aus Original (nach den Funktionen)
     $originalContent = Get-Content $originalScriptPath -Raw
     if ($originalContent -match '(?s)#---+\[Execution\]---+(.*)$') {
@@ -338,8 +333,97 @@ if (Test-Path $OutputPath) {
     Write-Host "  File: $OutputPath" -ForegroundColor White
     Write-Host "  Size: $([math]::Round($fileInfo.Length / 1KB, 1)) KB" -ForegroundColor White
     Write-Host "  Lines: $lineCount" -ForegroundColor White
-}
-else {
+} else {
     Write-Error "Build failed - output file not created"
+}
+#endregion
+
+#region Post-Build Validation
+Write-Host ""
+Write-Host "Running post-build validation..." -ForegroundColor Cyan
+
+$validationErrors = @()
+
+# 1. Syntax Check
+Write-Host "  [1/3] Checking syntax..." -ForegroundColor Gray
+try {
+    $parseErrors = @()
+    $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $OutputPath -Raw), [ref]$parseErrors)
+
+    if ($parseErrors.Count -gt 0) {
+        $validationErrors += @{
+            Type    = 'Syntax'
+            Message = "Found $($parseErrors.Count) syntax errors"
+            Details = ($parseErrors | ForEach-Object { "Line $($_.Token.StartLine): $($_.Message)" }) -join "`n"
+        }
+        Write-Host "    ❌ Syntax errors found" -ForegroundColor Red
+    } else {
+        Write-Host "    ✓ Syntax valid" -ForegroundColor Green
+    }
+} catch {
+    $validationErrors += @{
+        Type    = 'Syntax'
+        Message = "Syntax check failed: $_"
+    }
+    Write-Host "    ❌ Syntax check failed: $_" -ForegroundColor Red
+}
+
+# 2. Required Functions Check
+Write-Host "  [2/3] Checking required functions..." -ForegroundColor Gray
+$requiredFunctions = @(
+    'Invoke-WsusOptimization'
+    'Invoke-WsusDeepClean'
+    'Invoke-WsusDatabaseOptimization'
+    'Get-WsusHealthStatus'
+    'Get-WsusEnvironment'
+)
+
+$scriptContent = Get-Content $OutputPath -Raw
+$missingFunctions = @()
+
+foreach ($func in $requiredFunctions) {
+    if ($scriptContent -notmatch "function\s+$func\s*\{") {
+        $missingFunctions += $func
+    }
+}
+
+if ($missingFunctions.Count -gt 0) {
+    $validationErrors += @{
+        Type    = 'Functions'
+        Message = "Missing required functions: $($missingFunctions -join ', ')"
+    }
+    Write-Host "    ❌ Missing functions: $($missingFunctions -join ', ')" -ForegroundColor Red
+} else {
+    Write-Host "    ✓ All required functions present" -ForegroundColor Green
+}
+
+# 3. Script Size Check
+Write-Host "  [3/3] Checking script size..." -ForegroundColor Gray
+if ($lineCount -lt 100) {
+    $validationErrors += @{
+        Type    = 'Size'
+        Message = "Script appears too small ($lineCount lines)"
+    }
+    Write-Host "    ❌ Script appears too small ($lineCount lines)" -ForegroundColor Red
+} else {
+    Write-Host "    ✓ Script size is acceptable ($lineCount lines)" -ForegroundColor Green
+}
+
+# Report validation results
+Write-Host ""
+if ($validationErrors.Count -eq 0) {
+    Write-Host "Validation: PASSED ✓" -ForegroundColor Green
+    exit 0
+} else {
+    Write-Host "Validation: FAILED ❌" -ForegroundColor Red
+    Write-Host ""
+    foreach ($error in $validationErrors) {
+        Write-Host "[$($error.Type)]" -ForegroundColor Red
+        Write-Host "  $($error.Message)"
+        if ($error.Details) {
+            Write-Host "  Details: $($error.Details)"
+        }
+    }
+    exit 1
 }
 #endregion

@@ -44,6 +44,7 @@ Features:
     )
 
     # Functions to export from this module, for best performance, do not use wildcards
+    # Note: Only includes functions that are currently implemented in the Public/ folder
     FunctionsToExport = @(
         # Main optimization functions
         'Invoke-WsusOptimization'
@@ -52,37 +53,25 @@ Features:
 
         # Configuration functions
         'Get-WsusIISConfig'
-        'Test-WsusIISConfig'
-        'Set-WsusIISConfig'
 
         # Health and diagnostics
         'Get-WsusHealthStatus'
         'Get-WsusEnvironment'
-        'Test-WsusPrerequisitesPublic'
+        'Test-WsusPrerequisites'
+        'Test-WsusUupMimeTypes'
 
         # Update management
         'Invoke-WsusAutoApprove'
-        'Deny-WsusSupersededUpdates'
         'Disable-WsusDriverSync'
-        'Enable-WsusDriverSync'
-        'Remove-WsusAutoApproveRule'
 
         # Storage management
         'Set-WsusLowStorageMode'
-        'Get-WsusStorageReport'
-        'Get-WsusContentSize'
+
+        # VM optimization
+        'Invoke-WsusVMOptimization'
 
         # Scheduled tasks
         'New-WsusMaintenanceTask'
-        'Remove-WsusMaintenanceTask'
-
-        # MIME types (Windows 11 support)
-        'Test-WsusUupMimeTypes'
-        'Add-WsusUupMimeTypes'
-
-        # VM optimization
-        'Get-VirtualMachineInfo'
-        'Invoke-WsusVMOptimization'
     )
 
     # Cmdlets to export from this module

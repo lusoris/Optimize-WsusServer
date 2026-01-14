@@ -1,0 +1,163 @@
+﻿name: Build & Validation
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+      - master
+    paths:
+      - 'Public/**'
+      - 'Private/**'
+      - 'Build/**'
+      - 'Data/**'
+      - 'Optimize-WsusServer.psd1'
+      - 'Optimize-WsusServer.psm1'
+  pull_request:
+    branches:
+      - develop
+      - main
+      - master
+
+jobs:
+  build:
+    name: Build Monolithic Script
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build monolithic script
+        shell: powershell
+        run: |
+          Write-Host "Building Optimize-WsusServer..." -ForegroundColor Cyan
+          & .\Build\Build-MonolithicScript.ps1 -Verbose
+
+      - name: Check build output
+        shell: powershell
+        run: |
+          $distFile = ".\dist\Optimize-WsusServer.ps1"
+          if (Test-Path $distFile) {
+            $size = (Get-Item $distFile).Length
+            $lines = (Get-Content $distFile | Measure-Object -Line).Lines
+            Write-Host "✓ Build output exists: $([math]::Round($size/1KB))KB, $lines lines" -ForegroundColor Green
+          } else {
+            Write-Error "Build output not found!"
+            exit 1
+          }
+
+  validate:
+    name: Validate Module
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-output
+          path: dist
+        continue-on-error: true
+
+      - name: Run PSScriptAnalyzer
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Verbose
+
+          Write-Host "Analyzing module files..." -ForegroundColor Cyan
+          $results = Invoke-ScriptAnalyzer -Path .\Public, .\Private -Settings .\PSScriptAnalyzerSettings.psd1 -Recurse
+
+          if ($results) {
+            Write-Host "Issues found:" -ForegroundColor Yellow
+            $results | ForEach-Object {
+              Write-Host "  [$($_.Severity)] $($_.RuleName): $($_.Message) (Line $($_.Line))"
+            }
+
+            # Fail on errors, warn on warnings
+            $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+            if ($errors) {
+              exit 1
+            }
+          } else {
+            Write-Host "✓ No issues found" -ForegroundColor Green
+          }
+
+      - name: Test manifest validity
+        shell: powershell
+        run: |
+          Write-Host "Testing manifest..." -ForegroundColor Cyan
+
+          $manifestPath = ".\Optimize-WsusServer.psd1"
+          try {
+            $manifest = Import-PowerShellDataFile $manifestPath
+            Write-Host "✓ Manifest is valid" -ForegroundColor Green
+            Write-Host "  Version: $($manifest.ModuleVersion)"
+            Write-Host "  Functions to export: $($manifest.FunctionsToExport.Count)"
+          } catch {
+            Write-Error "Manifest validation failed: $_"
+            exit 1
+          }
+
+      - name: Compare exported vs implemented functions
+        shell: powershell
+        run: |
+          Write-Host "Checking function exports..." -ForegroundColor Cyan
+
+          $manifest = Import-PowerShellDataFile ".\Optimize-WsusServer.psd1"
+          $publicFunctions = Get-ChildItem .\Public -Filter *.ps1 | ForEach-Object { $_.BaseName }
+
+          $exported = $manifest.FunctionsToExport
+          $missing = @()
+          $extra = @()
+
+          foreach ($func in $exported) {
+            if ($func -notin $publicFunctions) {
+              $missing += $func
+            }
+          }
+
+          foreach ($func in $publicFunctions) {
+            if ($func -notin $exported) {
+              $extra += $func
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            Write-Host "⚠ Exported but not implemented:" -ForegroundColor Yellow
+            $missing | ForEach-Object { Write-Host "  - $_" }
+          }
+
+          if ($extra.Count -gt 0) {
+            Write-Host "⚠ Implemented but not exported:" -ForegroundColor Yellow
+            $extra | ForEach-Object { Write-Host "  - $_" }
+          }
+
+          if ($missing.Count -eq 0 -and $extra.Count -eq 0) {
+            Write-Host "✓ Function exports match implementation" -ForegroundColor Green
+          }
+
+  upload-artifact:
+    name: Upload Build Artifacts
+    runs-on: windows-latest
+    needs: build
+    if: success()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build monolithic script
+        shell: powershell
+        run: |
+          & .\Build\Build-MonolithicScript.ps1
+
+      - name: Upload dist folder
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-output
+          path: dist/
+          retention-days: 30
