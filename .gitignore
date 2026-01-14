@@ -44,5 +44,12 @@ PSScriptAnalyzerResults.json
 # Claude Code temp files
 tmpclaude-*
 
+# Build output (generated files)
+dist/
+!dist/.gitkeep
+
 # Local development notes (keep briefing for now)
 # wsus-script-update-briefing.md
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md
