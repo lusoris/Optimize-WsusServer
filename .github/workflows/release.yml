@@ -9,44 +9,12 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Create Release
+  build:
+    name: Build Release
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Validate PowerShell Script
-        shell: pwsh
-        run: |
-          # Syntax check
-          $errors = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            "${{ github.workspace }}/Optimize-WsusServer.ps1",
-            [ref]$null,
-            [ref]$errors
-          )
-
-          if ($errors) {
-              Write-Error "Syntax errors found in Optimize-WsusServer.ps1"
-              $errors | ForEach-Object { Write-Error $_.Message }
-              exit 1
-          }
-
-          # PSScriptAnalyzer check
-          Set-PSRepository PSGallery -InstallationPolicy Trusted
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-
-          $results = Invoke-ScriptAnalyzer -Path ./Optimize-WsusServer.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
-          $errors = ($results | Where-Object Severity -eq 'Error').Count
-
-          if ($errors -gt 0) {
-              $results | Format-Table -AutoSize
-              Write-Error "PSScriptAnalyzer found $errors error(s)"
-              exit 1
-          }
-
-          Write-Host "Script validation passed"
 
       - name: Extract version from tag
         id: version
@@ -57,56 +25,174 @@ jobs:
           Write-Host "Version: $version"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Verify script version matches tag
+      - name: Verify manifest version matches tag
         shell: pwsh
         run: |
           $tagVersion = "${{ steps.version.outputs.version }}"
-          $scriptContent = Get-Content ./Optimize-WsusServer.ps1 -Raw
+          $manifest = Import-PowerShellDataFile './Optimize-WsusServer.psd1'
+          $manifestVersion = $manifest.ModuleVersion
 
-          if ($scriptContent -match "Version\s*=\s*['""]([^'""]+)['""]") {
-              $scriptVersion = $matches[1]
-              Write-Host "Script version: $scriptVersion"
-              Write-Host "Tag version: $tagVersion"
+          Write-Host "Manifest version: $manifestVersion"
+          Write-Host "Tag version: $tagVersion"
 
-              if ($scriptVersion -ne $tagVersion) {
-                  Write-Warning "Script version ($scriptVersion) does not match tag version ($tagVersion)"
-                  Write-Warning "Consider updating the script version before release"
-              }
+          if ($manifestVersion -ne $tagVersion) {
+              Write-Host "::warning::Manifest version ($manifestVersion) does not match tag version ($tagVersion)"
+              Write-Host "Consider updating the manifest version before release"
           }
 
-      - name: Generate release notes
-        id: notes
+      - name: Validate Module Manifest
         shell: pwsh
         run: |
+          try {
+              $manifest = Test-ModuleManifest -Path './Optimize-WsusServer.psd1' -ErrorAction Stop
+              Write-Host "Module validation passed"
+              Write-Host "  Name: $($manifest.Name)"
+              Write-Host "  Version: $($manifest.Version)"
+              Write-Host "  Functions: $($manifest.ExportedFunctions.Count)"
+          }
+          catch {
+              Write-Host "::error::Module manifest validation failed: $_"
+              exit 1
+          }
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+          $paths = @('./Public', './Private', './Build') | Where-Object { Test-Path $_ }
+
+          $results = @()
+          foreach ($path in $paths) {
+            $results += Invoke-ScriptAnalyzer -Path $path -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          }
+
+          $errors = ($results | Where-Object Severity -eq 'Error').Count
+
+          if ($errors -gt 0) {
+              $results | Where-Object Severity -eq 'Error' | Format-Table -AutoSize
+              Write-Host "::error::PSScriptAnalyzer found $errors error(s)"
+              exit 1
+          }
+
+          Write-Host "PSScriptAnalyzer passed (Errors: 0)"
+
+      - name: Build monolithic script
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          .\Build\Build-MonolithicScript.ps1 -Version $version
+
+      - name: Validate built script
+        shell: pwsh
+        run: |
+          $scriptPath = './dist/Optimize-WsusServer.ps1'
+
+          # Syntax check
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$null, [ref]$errors)
+
+          if ($errors) {
+              Write-Host "::error::Syntax errors in built script"
+              $errors | ForEach-Object { Write-Host $_.Message }
+              exit 1
+          }
+
+          $fileInfo = Get-Item $scriptPath
+          Write-Host "Build validation passed"
+          Write-Host "  Size: $([math]::Round($fileInfo.Length / 1KB, 1)) KB"
+          Write-Host "  Lines: $((Get-Content $scriptPath).Count)"
+
+      - name: Generate checksums
+        id: checksums
+        shell: pwsh
+        run: |
+          $scriptHash = Get-FileHash './dist/Optimize-WsusServer.ps1' -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+          $manifestHash = Get-FileHash './Optimize-WsusServer.psd1' -Algorithm SHA256 | Select-Object -ExpandProperty Hash
+
+          Write-Host "Script SHA256: $scriptHash"
+          Write-Host "Manifest SHA256: $manifestHash"
+
+          "script_hash=$scriptHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "manifest_hash=$manifestHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Generate release notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $scriptHash = "${{ steps.checksums.outputs.script_hash }}"
+
           $notes = @"
-          ## Optimize-WsusServer v${{ steps.version.outputs.version }}
+          ## Optimize-WsusServer v$version
 
-          ### Installation
+          ### Downloads
 
-          1. Download ``Optimize-WsusServer.ps1`` from the assets below
-          2. Run in PowerShell 5.1 (not PowerShell 7):
+          | File | Description |
+          |------|-------------|
+          | ``Optimize-WsusServer.ps1`` | Monolithic script for production use |
+          | ``Optimize-WsusServer.psd1`` | Module manifest (for module installation) |
+
+          ### Quick Start
+
+          **Option 1: Monolithic Script (Recommended for production)**
 
           ``````powershell
-          .\Optimize-WsusServer.ps1 -FirstRun
+          # Download and run
+          .\Optimize-WsusServer.ps1 -HealthCheck
+          ``````
+
+          **Option 2: PowerShell Module (For development)**
+
+          ``````powershell
+          # Clone repository and import
+          Import-Module .\Optimize-WsusServer.psd1
+          Get-WsusHealthStatus
           ``````
 
           ### Requirements
 
-          - Windows Server 2016/2019/2022 with WSUS
-          - Windows PowerShell 5.1
+          - Windows Server 2012 R2 / 2016 / 2019 / 2022 / 2025
+          - Windows PowerShell 5.1 (not PowerShell 7)
           - SqlServer PowerShell module
           - Administrator privileges
 
           ### Checksums
 
           ``````
-          SHA256: $(Get-FileHash ./Optimize-WsusServer.ps1 -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+          Optimize-WsusServer.ps1 SHA256: $scriptHash
           ``````
+
+          ### Documentation
+
+          Full documentation available at [docs/](https://github.com/lusoris/Optimize-WsusServer/tree/main/docs)
           "@
 
-          # Write to file for GitHub release
           $notes | Out-File -FilePath release-notes.md -Encoding utf8
-          Write-Host $notes
+
+      - name: Create module archive
+        shell: pwsh
+        run: |
+          # Create a zip with module files for those who want the full module
+          $moduleFiles = @(
+            'Optimize-WsusServer.psd1',
+            'Optimize-WsusServer.psm1',
+            'Public',
+            'Private',
+            'Data',
+            'LICENSE',
+            'README.md'
+          )
+
+          $tempDir = New-Item -ItemType Directory -Path './release-module' -Force
+          foreach ($file in $moduleFiles) {
+            if (Test-Path $file) {
+              Copy-Item -Path $file -Destination $tempDir -Recurse -Force
+            }
+          }
+
+          Compress-Archive -Path "$tempDir/*" -DestinationPath './Optimize-WsusServer-Module.zip' -Force
+          Remove-Item $tempDir -Recurse -Force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -116,7 +202,9 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            Optimize-WsusServer.ps1
+            dist/Optimize-WsusServer.ps1
+            Optimize-WsusServer.psd1
+            Optimize-WsusServer-Module.zip
             LICENSE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
